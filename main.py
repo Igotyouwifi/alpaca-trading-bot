@@ -3,11 +3,6 @@ import alpaca_trade_api as tradeapi
 import pandas as pd
 import os
 
-from flask import Flask, jsonify
-import alpaca_trade_api as tradeapi
-import pandas as pd
-import os
-
 app = Flask(__name__)
 
 # =========================
