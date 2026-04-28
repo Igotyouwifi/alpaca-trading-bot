@@ -1,208 +1,112 @@
-from flask import Flask, jsonify
-import alpaca_trade_api as tradeapi
-import pandas as pd
-import os
+# ==========================================================
+# ADVANCED ALPACA TRADING SYSTEM (PRODUCTION ARCHITECTURE)
+# ==========================================================
 
-app = Flask(__name__)
+# PURPOSE:
+# This system is a RULE-BASED + SIGNAL SCORING trading engine.
+# It does NOT predict the future with certainty.
+# It identifies high-probability setups using market data.
 
-# =========================
-# ENV VARIABLES
-# =========================
-API_KEY = os.getenv("ALPACA_API_KEY")
-SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
-BASE_URL = "https://paper-api.alpaca.markets"
+# ==========================================================
+# CORE DESIGN PRINCIPLES
+# ==========================================================
 
-api = tradeapi.REST(API_KEY, SECRET_KEY, BASE_URL)
+# 1. NO GUARANTEED PROFITS
+# - Markets are probabilistic, not predictable
+# - This system aims for consistency, not perfection
 
-SYMBOLS = ["AAPL", "TSLA", "NVDA"]
-TIMEFRAME = "1Min"
+# 2. SIGNAL OVER PREDICTION
+# - Focus on probability-based signals (not “AI prediction”)
+# - Combine multiple indicators for decision making
 
-# =========================
-# SIGNAL ENGINE
-# =========================
-def get_signal(symbol):
-    bars = api.get_bars(symbol, TIMEFRAME, limit=50).df
+# 3. RISK MANAGEMENT FIRST
+# - Never trade without filters
+# - Protect capital before chasing profit
 
-    if len(bars) < 20:
-        return "hold"
+# ==========================================================
+# SYSTEM MODULES
+# ==========================================================
 
-    bars["ma_short"] = bars["close"].rolling(5).mean()
-    bars["ma_long"] = bars["close"].rolling(20).mean()
+# 1. DATA ENGINE
+# - Pulls real-time market data (Alpaca)
+# - Processes candles (1Min / 5Min)
+# - Maintains symbol watchlist
 
-    if bars["ma_short"].iloc[-1] > bars["ma_long"].iloc[-1]:
-        return "buy"
-    elif bars["ma_short"].iloc[-1] < bars["ma_long"].iloc[-1]:
-        return "sell"
-    return "hold"
+# 2. SIGNAL ENGINE (MULTI-INDICATOR)
+# - Moving Averages (trend direction)
+# - RSI (overbought / oversold)
+# - MACD (momentum strength)
+# - Volume spikes (activity detection)
 
+# OUTPUT:
+# - Generates a SCORE (0–100)
+# - NOT just BUY / SELL
 
-# =========================
-# RISK FILTER (SAFETY LAYER)
-# =========================
-def risk_filter(symbol):
-    bars = api.get_bars(symbol, TIMEFRAME, limit=20).df
+# ==========================================================
+# 3. CONFIDENCE SYSTEM
+# ==========================================================
+# Example:
+# - 80–100 = strong trade setup
+# - 60–79  = weak setup
+# - <60    = no trade
 
-    if len(bars) < 20:
-        return False
+# Only high-confidence trades are executed.
 
-    volatility = (bars["close"].max() - bars["close"].min()) / bars["close"].mean()
+# ==========================================================
+# 4. RISK FILTER SYSTEM
+# ==========================================================
+# - Blocks high volatility conditions
+# - Prevents trading during unstable price swings
+# - Controls exposure per symbol
 
-    # block high volatility moves
-    if volatility > 0.05:
-        return False
+# ==========================================================
+# 5. EXECUTION ENGINE
+# ==========================================================
+# - Sends buy/sell orders to Alpaca
+# - Uses paper trading first (safe testing)
+# - Can be upgraded to live trading later
 
-    return True
+# ==========================================================
+# 6. TIER SYSTEM (SAAS MODEL)
+# ==========================================================
 
+# Starter Tier:
+# - View signals only
+# - Limited symbols
+# - No auto-trading
 
-# =========================
-# TRADING ENGINE
-# =========================
-def trade():
-    results = []
+# Pro Tier:
+# - Better indicators
+# - More symbols
+# - Advanced filtering
 
-    for symbol in SYMBOLS:
-        signal = get_signal(symbol)
+# Elite Tier:
+# - High-frequency scanning
+# - Lower latency updates
+# - Enhanced scoring model
 
-        if signal == "buy" and risk_filter(symbol):
-            api.submit_order(
-                symbol=symbol,
-                qty=1,
-                side="buy",
-                type="market",
-                time_in_force="gtc"
-            )
+# Ultra Tier:
+# - Full automation
+# - Auto trading enabled
+# - Full feature access
 
-        elif signal == "sell" and risk_filter(symbol):
-            api.submit_order(
-                symbol=symbol,
-                qty=1,
-                side="sell",
-                type="market",
-                time_in_force="gtc"
-            )
+# ==========================================================
+# 7. ADVANCED FEATURES (FUTURE UPGRADE)
+# ==========================================================
 
-        results.append({"symbol": symbol, "signal": signal})
+# - Crypto support expansion
+# - Market regime detection (bull/bear/sideways)
+# - News sentiment integration (optional)
+# - Daily profit/loss reporting
+# - User dashboard + API key system
+# - Customer support integration
 
-    return results
-
-
-# =========================
-# ROUTES
-# =========================
-@app.route("/")
-def home():
-    return "Bot running"
-
-@app.route("/trade")
-def run_trade():
-    result = trade()
-    return jsonify(result)
-
-
-# =========================
-# START SERVER
-# =========================
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
-
-app = Flask(__name__)
-
-# =========================
-# ENV VARIABLES
-# =========================
-API_KEY = os.getenv("ALPACA_API_KEY")
-SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
-BASE_URL = "https://paper-api.alpaca.markets"
-
-api = tradeapi.REST(API_KEY, SECRET_KEY, BASE_URL)
-
-SYMBOLS = ["AAPL", "TSLA", "NVDA"]
-TIMEFRAME = "1Min"
-
-# =========================
-# SIGNAL ENGINE
-# =========================
-def get_signal(symbol):
-    bars = api.get_bars(symbol, TIMEFRAME, limit=50).df
-
-    if len(bars) < 20:
-        return "hold"
-
-    bars["ma_short"] = bars["close"].rolling(5).mean()
-    bars["ma_long"] = bars["close"].rolling(20).mean()
-
-    if bars["ma_short"].iloc[-1] > bars["ma_long"].iloc[-1]:
-        return "buy"
-    elif bars["ma_short"].iloc[-1] < bars["ma_long"].iloc[-1]:
-        return "sell"
-    return "hold"
-
-
-# =========================
-# RISK FILTER (SAFETY LAYER)
-# =========================
-def risk_filter(symbol):
-    bars = api.get_bars(symbol, TIMEFRAME, limit=20).df
-
-    if len(bars) < 20:
-        return False
-
-    volatility = (bars["close"].max() - bars["close"].min()) / bars["close"].mean()
-
-    # block high volatility moves
-    if volatility > 0.05:
-        return False
-
-    return True
-
-
-# =========================
-# TRADING ENGINE
-# =========================
-def trade():
-    results = []
-
-    for symbol in SYMBOLS:
-        signal = get_signal(symbol)
-
-        if signal == "buy" and risk_filter(symbol):
-            api.submit_order(
-                symbol=symbol,
-                qty=1,
-                side="buy",
-                type="market",
-                time_in_force="gtc"
-            )
-
-        elif signal == "sell" and risk_filter(symbol):
-            api.submit_order(
-                symbol=symbol,
-                qty=1,
-                side="sell",
-                type="market",
-                time_in_force="gtc"
-            )
-
-        results.append({"symbol": symbol, "signal": signal})
-
-    return results
-
-
-# =========================
-# ROUTES
-# =========================
-@app.route("/")
-def home():
-    return "Bot running"
-
-@app.route("/trade")
-def run_trade():
-    result = trade()
-    return jsonify(result)
-
-
-# =========================
-# START SERVER
-# =========================
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+# ==========================================================
+# FINAL GOAL
+# ==========================================================
+# Build a scalable trading SaaS platform:
+# - Signal engine (core)
+# - Subscription tiers
+# - Risk-controlled execution
+# - Expandable AI/ML layer later
+# ==========================================================
