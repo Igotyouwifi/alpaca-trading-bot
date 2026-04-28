@@ -1,112 +1,53 @@
 # ==========================================================
-# ADVANCED ALPACA TRADING SYSTEM (PRODUCTION ARCHITECTURE)
+# ALPACA TRADING BOT - SYSTEM OVERVIEW
 # ==========================================================
 
-# PURPOSE:
-# This system is a RULE-BASED + SIGNAL SCORING trading engine.
-# It does NOT predict the future with certainty.
-# It identifies high-probability setups using market data.
+# WARNING:
+# This system does NOT guarantee profits.
+# It uses probability-based trading signals.
 
 # ==========================================================
-# CORE DESIGN PRINCIPLES
+# CORE IDEA
 # ==========================================================
-
-# 1. NO GUARANTEED PROFITS
-# - Markets are probabilistic, not predictable
-# - This system aims for consistency, not perfection
-
-# 2. SIGNAL OVER PREDICTION
-# - Focus on probability-based signals (not “AI prediction”)
-# - Combine multiple indicators for decision making
-
-# 3. RISK MANAGEMENT FIRST
-# - Never trade without filters
-# - Protect capital before chasing profit
+# The bot analyzes market data and generates:
+# - BUY
+# - SELL
+# - HOLD
+# signals based on technical indicators.
 
 # ==========================================================
-# SYSTEM MODULES
+# INDICATORS USED
 # ==========================================================
-
-# 1. DATA ENGINE
-# - Pulls real-time market data (Alpaca)
-# - Processes candles (1Min / 5Min)
-# - Maintains symbol watchlist
-
-# 2. SIGNAL ENGINE (MULTI-INDICATOR)
 # - Moving Averages (trend direction)
-# - RSI (overbought / oversold)
-# - MACD (momentum strength)
-# - Volume spikes (activity detection)
-
-# OUTPUT:
-# - Generates a SCORE (0–100)
-# - NOT just BUY / SELL
+# - Price momentum
+# - Basic volatility filtering
 
 # ==========================================================
-# 3. CONFIDENCE SYSTEM
+# RISK MANAGEMENT
 # ==========================================================
-# Example:
-# - 80–100 = strong trade setup
-# - 60–79  = weak setup
-# - <60    = no trade
-
-# Only high-confidence trades are executed.
+# - Avoids high volatility conditions
+# - Prevents unsafe trades
+# - Uses basic safety filters before executing orders
 
 # ==========================================================
-# 4. RISK FILTER SYSTEM
+# EXECUTION FLOW
 # ==========================================================
-# - Blocks high volatility conditions
-# - Prevents trading during unstable price swings
-# - Controls exposure per symbol
+# 1. Fetch market data from Alpaca
+# 2. Calculate trading signals
+# 3. Apply risk filter
+# 4. Execute paper trade (if allowed)
+# 5. Return results via API
 
 # ==========================================================
-# 5. EXECUTION ENGINE
+# TIER SYSTEM (FUTURE FEATURE)
 # ==========================================================
-# - Sends buy/sell orders to Alpaca
-# - Uses paper trading first (safe testing)
-# - Can be upgraded to live trading later
-
-# ==========================================================
-# 6. TIER SYSTEM (SAAS MODEL)
-# ==========================================================
-
-# Starter Tier:
-# - View signals only
-# - Limited symbols
-# - No auto-trading
-
-# Pro Tier:
-# - Better indicators
-# - More symbols
-# - Advanced filtering
-
-# Elite Tier:
-# - High-frequency scanning
-# - Lower latency updates
-# - Enhanced scoring model
-
-# Ultra Tier:
-# - Full automation
-# - Auto trading enabled
-# - Full feature access
+# Starter → signals only
+# Pro → better filters + more symbols
+# Ultra → automation enabled
 
 # ==========================================================
-# 7. ADVANCED FEATURES (FUTURE UPGRADE)
+# IMPORTANT NOTE
 # ==========================================================
-
-# - Crypto support expansion
-# - Market regime detection (bull/bear/sideways)
-# - News sentiment integration (optional)
-# - Daily profit/loss reporting
-# - User dashboard + API key system
-# - Customer support integration
-
-# ==========================================================
-# FINAL GOAL
-# ==========================================================
-# Build a scalable trading SaaS platform:
-# - Signal engine (core)
-# - Subscription tiers
-# - Risk-controlled execution
-# - Expandable AI/ML layer later
+# This is a rule-based trading system.
+# It is NOT an AI that predicts markets perfectly.
 # ==========================================================
