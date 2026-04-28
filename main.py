@@ -1,19 +1,3 @@
-```bash
-cd your-project-directory
-sed -i 's/–/-/g' main.py
-git add main.py
-git commit -m "fix syntax error dashes"
-git push
-```
-
-Replace `your-project-directory` with your actual folder path.
-
----
-
-## If you need the FULL fixed main.py file instead:
-
-Paste this entire file and replace your current `main.py`:
-
 ```python
 from flask import Flask, jsonify, render_template_string
 from alpaca_trade_api import REST
