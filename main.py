@@ -1,109 +1,60 @@
-from flask import Flask
+from flask import Flask, jsonify
+import alpaca_trade_api as tradeapi
+import pandas as pd
 import os
 import time
-import requests
-import pandas as pd
-from ta.momentum import RSIIndicator
 
 app = Flask(__name__)
 
-API_KEY = os.getenv("APCA_API_KEY_ID")
-SECRET_KEY = os.getenv("APCA_API_SECRET_KEY")
+API_KEY = os.getenv("ALPACA_API_KEY")
+SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
 BASE_URL = "https://paper-api.alpaca.markets"
 
-STOCKS = [
-    "AAPL", "TSLA", "MSFT", "NVDA", "AMZN",
-    "META", "GOOGL", "AMD", "NFLX", "PLTR"
-]
+api = tradeapi.REST(API_KEY, SECRET_KEY, BASE_URL)
 
-headers = {
-    "APCA-API-KEY-ID": API_KEY,
-    "APCA-API-SECRET-KEY": SECRET_KEY
-}
+SYMBOLS = ["AAPL", "TSLA", "NVDA"]
+TIMEFRAME = "1Min"
 
+def get_signal(symbol):
+    bars = api.get_bars(symbol, TIMEFRAME, limit=50).df
 
-# ---------------------------
-# GET PRICE DATA
-# ---------------------------
-def get_bars(symbol):
-    url = f"{BASE_URL}/v2/stocks/{symbol}/bars?timeframe=5Min&limit=50"
-    r = requests.get(url, headers=headers)
-    data = r.json()
+    if len(bars) < 20:
+        return "hold"
 
-    if "bars" not in data:
-        return None
+    bars["ma_short"] = bars["close"].rolling(5).mean()
+    bars["ma_long"] = bars["close"].rolling(20).mean()
 
-    closes = [bar["c"] for bar in data["bars"]]
-    return closes
+    if bars["ma_short"].iloc[-1] > bars["ma_long"].iloc[-1]:
+        return "buy"
+    elif bars["ma_short"].iloc[-1] < bars["ma_long"].iloc[-1]:
+        return "sell"
+    return "hold"
 
-
-# ---------------------------
-# AI SCORE ENGINE
-# ---------------------------
-def analyze_stock(symbol):
-    prices = get_bars(symbol)
-    if not prices or len(prices) < 20:
-        return None
-
-    df = pd.DataFrame(prices, columns=["close"])
-
-    rsi = RSIIndicator(df["close"]).rsi().iloc[-1]
-
-    score = 50  # neutral base
-
-    # RSI logic (core AI signal)
-    if rsi < 30:
-        score += 30  # oversold → bullish
-    elif rsi > 70:
-        score -= 30  # overbought → bearish
-
-    return {
-        "symbol": symbol,
-        "rsi": rsi,
-        "score": score
-    }
-
-
-# ---------------------------
-# TRADE DECISION ENGINE
-# ---------------------------
-def decide_trade(signal):
-    if signal["score"] >= 75:
-        return "BUY"
-    elif signal["score"] <= 25:
-        return "SELL"
-    else:
-        return "HOLD"
-
-
-# ---------------------------
-# SCANNER LOOP
-# ---------------------------
-def scan_market():
+def trade():
     results = []
 
-    for stock in STOCKS:
-        signal = analyze_stock(stock)
-        if signal:
-            decision = decide_trade(signal)
-            signal["decision"] = decision
-            results.append(signal)
+    for symbol in SYMBOLS:
+        signal = get_signal(symbol)
+
+        if signal == "buy":
+            api.submit_order(symbol=symbol, qty=1, side="buy", type="market", time_in_force="gtc")
+        elif signal == "sell":
+            api.submit_order(symbol=symbol, qty=1, side="sell", type="market", time_in_force="gtc")
+
+        results.append({"symbol": symbol, "signal": signal})
 
     return results
 
-
-# ---------------------------
-# FLASK ROUTE
-# ---------------------------
 @app.route("/")
 def home():
-    signals = scan_market()
+    return "Bot running"
 
-    return {
-        "status": "running",
-        "signals": signals
-    }
-
+@app.route("/trade")
+def run_trade():
+    result = trade()
+    return jsonify(result)
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    while True:
+        trade()
+        time.sleep(60)
