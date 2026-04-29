@@ -1,26 +1,20 @@
 from flask import Flask, jsonify, request
-import alpaca_trade_api as tradeapi
-import pandas as pd
 import os
+import pandas as pd
+import alpaca_trade_api as tradeapi
 
 app = Flask(__name__)
 
-# =========================
-# API SETTINGS
-# =========================
 API_KEY = os.getenv("ALPACA_API_KEY")
 SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
-BASE_URL = "https://paper-api.alpaca.markets"
+BASE_URL = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
 
 AUTO_TRADE = os.getenv("AUTO_TRADE", "false").lower() == "true"
 
-api = tradeapi.REST(API_KEY, SECRET_KEY, BASE_URL)
-
 TIMEFRAME = "1Min"
 
-# =========================
-# TIER SYSTEM
-# =========================
+api = tradeapi.REST(API_KEY, SECRET_KEY, BASE_URL)
+
 TIERS = {
     "starter": {
         "price": "$0/month",
@@ -36,7 +30,7 @@ TIERS = {
         "min_score_buy": 75,
         "max_score_sell": 25,
         "auto_trade": False,
-        "features": ["advanced signals", "5 stocks", "RSI", "MACD", "volume filter"]
+        "features": ["advanced signals", "RSI", "MACD", "volume filter"]
     },
     "elite": {
         "price": "$29.99/month",
@@ -44,7 +38,7 @@ TIERS = {
         "min_score_buy": 70,
         "max_score_sell": 30,
         "auto_trade": False,
-        "features": ["stronger scoring", "more stocks", "better filters", "confidence engine"]
+        "features": ["stronger scoring", "more stocks", "confidence engine"]
     },
     "ultra": {
         "price": "$59.99/month",
@@ -52,7 +46,7 @@ TIERS = {
         "min_score_buy": 68,
         "max_score_sell": 32,
         "auto_trade": True,
-        "features": ["full automation", "highest tier", "auto trading allowed", "advanced scoring"]
+        "features": ["full automation", "auto trading allowed", "advanced scoring"]
     },
     "mastery_plus": {
         "price": "$499/month",
@@ -60,19 +54,11 @@ TIERS = {
         "min_score_buy": 65,
         "max_score_sell": 35,
         "auto_trade": True,
-        "features": [
-            "top tier",
-            "largest symbol list",
-            "highest automation access",
-            "advanced scoring",
-            "premium signal engine"
-        ]
+        "features": ["top tier", "largest symbol list", "automation", "premium signal engine"]
     }
 }
 
-# =========================
-# DATA ENGINE
-# =========================
+
 def get_data(symbol):
     try:
         bars = api.get_bars(
@@ -83,9 +69,9 @@ def get_data(symbol):
         ).df
 
         if bars is not None and not bars.empty:
-            return bars
+            return bars[["open", "high", "low", "close", "volume"]]
 
-        print(f"ALPACA EMPTY DATA FOR {symbol}, USING YFINANCE FALLBACK")
+        print(f"ALPACA EMPTY DATA FOR {symbol}")
 
     except Exception as e:
         print(f"ALPACA DATA ERROR FOR {symbol}: {e}")
@@ -102,8 +88,10 @@ def get_data(symbol):
         )
 
         if yf_df is None or yf_df.empty:
-            print(f"YFINANCE ALSO EMPTY FOR {symbol}")
             return pd.DataFrame()
+
+        if isinstance(yf_df.columns, pd.MultiIndex):
+            yf_df.columns = [col[0] for col in yf_df.columns]
 
         yf_df = yf_df.rename(columns={
             "Open": "open",
@@ -113,21 +101,24 @@ def get_data(symbol):
             "Volume": "volume"
         })
 
-        return yf_df[["open", "high", "low", "close", "volume"]]
+        needed = ["open", "high", "low", "close", "volume"]
+
+        for col in needed:
+            if col not in yf_df.columns:
+                return pd.DataFrame()
+
+        return yf_df[needed].dropna()
 
     except Exception as e:
         print(f"YFINANCE ERROR FOR {symbol}: {e}")
         return pd.DataFrame()
 
-# =========================
-# INDICATORS
-# =========================
+
 def calculate_indicators(df):
     df = df.copy()
 
     df["ma_fast"] = df["close"].rolling(5).mean()
-    df["ma_mid"] = df["close"].rolling(20).mean()
-    df["ma_slow"] = df["close"].rolling(50).mean()
+    df["ma_slow"] = df["close"].rolling(20).mean()
 
     delta = df["close"].diff()
     gain = delta.where(delta > 0, 0).rolling(14).mean()
@@ -137,236 +128,221 @@ def calculate_indicators(df):
 
     ema12 = df["close"].ewm(span=12, adjust=False).mean()
     ema26 = df["close"].ewm(span=26, adjust=False).mean()
+
     df["macd"] = ema12 - ema26
     df["macd_signal"] = df["macd"].ewm(span=9, adjust=False).mean()
 
-    df["volume_avg"] = df["volume"].rolling(20).mean()
-    df["volume_spike"] = df["volume"] / (df["volume_avg"] + 0.000001)
+    df["avg_volume"] = df["volume"].rolling(20).mean()
 
-    df["volatility"] = (df["high"].rolling(20).max() - df["low"].rolling(20).min()) / df["close"].rolling(20).mean()
+    df = df.dropna()
 
     return df
 
-# =========================
-# SCORING ENGINE
-# =========================
-def score_symbol(symbol):
-    df = get_data(symbol)
 
-    if df.empty:
-        return {
-            "symbol": symbol,
-            "signal": "hold",
-            "score": 0,
-            "confidence": "none",
-            "reason": "no_data_from_alpaca"
-        }
-
-    if len(df) < 60:
-        return {
-            "symbol": symbol,
-            "signal": "hold",
-            "score": 0,
-            "confidence": "none",
-            "bars_received": len(df),
-            "reason": "not_enough_market_data"
-        }
-
-    df = calculate_indicators(df)
+def score_symbol(df, tier_config):
     latest = df.iloc[-1]
-
     score = 50
     reasons = []
 
-    # Trend
-    if latest["ma_fast"] > latest["ma_mid"]:
-        score += 15
-        reasons.append("fast_trend_up")
+    if latest["ma_fast"] > latest["ma_slow"]:
+        score += 20
+        reasons.append("bullish_trend")
     else:
-        score -= 15
-        reasons.append("fast_trend_down")
+        score -= 20
+        reasons.append("bearish_trend")
 
-    if latest["ma_mid"] > latest["ma_slow"]:
-        score += 15
-        reasons.append("long_trend_up")
-    else:
-        score -= 15
-        reasons.append("long_trend_down")
-
-    # RSI
     if latest["rsi"] < 30:
-        score += 15
-        reasons.append("rsi_oversold")
+        score += 20
+        reasons.append("oversold_rsi")
     elif latest["rsi"] > 70:
-        score -= 15
-        reasons.append("rsi_overbought")
+        score -= 20
+        reasons.append("overbought_rsi")
     else:
-        reasons.append("rsi_neutral")
+        reasons.append("neutral_rsi")
 
-    # MACD
     if latest["macd"] > latest["macd_signal"]:
-        score += 15
-        reasons.append("macd_bullish")
+        score += 20
+        reasons.append("bullish_macd")
     else:
-        score -= 15
-        reasons.append("macd_bearish")
+        score -= 20
+        reasons.append("bearish_macd")
 
-    # Volume
-    if latest["volume_spike"] > 1.5:
+    if latest["volume"] > latest["avg_volume"]:
         score += 10
-        reasons.append("volume_spike")
+        reasons.append("volume_confirmed")
     else:
-        reasons.append("normal_volume")
+        score -= 5
+        reasons.append("weak_volume")
 
-    # Volatility safety
-    if latest["volatility"] > 0.05:
-        score -= 25
+    volatility = (df["close"].max() - df["close"].min()) / df["close"].mean()
+
+    if volatility > 0.08:
+        score -= 30
         reasons.append("high_volatility_risk")
-    else:
+    elif volatility < 0.04:
         score += 10
         reasons.append("stable_volatility")
 
     score = max(0, min(100, int(score)))
 
-    if score >= 75:
+    if score >= tier_config["min_score_buy"]:
         signal = "buy"
+        confidence = "high"
+    elif score <= tier_config["max_score_sell"]:
+        signal = "sell"
         confidence = "high"
     elif score >= 60:
-        signal = "buy"
+        signal = "watch_buy"
         confidence = "medium"
-    elif score <= 25:
-        signal = "sell"
-        confidence = "high"
     elif score <= 40:
-        signal = "sell"
+        signal = "watch_sell"
         confidence = "medium"
     else:
         signal = "hold"
         confidence = "low"
 
-    return {
-        "symbol": symbol,
-        "signal": signal,
-        "score": score,
-        "confidence": confidence,
-        "price": round(float(latest["close"]), 2),
-        "rsi": round(float(latest["rsi"]), 2),
-        "macd": round(float(latest["macd"]), 4),
-        "volatility": round(float(latest["volatility"]), 4),
-        "volume_spike": round(float(latest["volume_spike"]), 2),
-        "reasons": reasons
-    }
+    return score, signal, confidence, reasons
 
-# =========================
-# SIGNAL RUNNER
-# =========================
-def run_signals(tier_name):
-    tier = TIERS.get(tier_name, TIERS["starter"])
+
+def generate_signal(symbol, tier_config):
+    try:
+        df = get_data(symbol)
+
+        if df.empty:
+            return {
+                "symbol": symbol,
+                "signal": "hold",
+                "score": 0,
+                "confidence": "none",
+                "reason": "no_data_available"
+            }
+
+        if len(df) < 30:
+            return {
+                "symbol": symbol,
+                "signal": "hold",
+                "score": 0,
+                "confidence": "none",
+                "bars_received": len(df),
+                "reason": "not_enough_market_data"
+            }
+
+        df = calculate_indicators(df)
+
+        if df.empty or len(df) < 5:
+            return {
+                "symbol": symbol,
+                "signal": "hold",
+                "score": 0,
+                "confidence": "none",
+                "reason": "not_enough_indicator_data"
+            }
+
+        score, signal, confidence, reasons = score_symbol(df, tier_config)
+
+        return {
+            "symbol": symbol,
+            "signal": signal,
+            "score": score,
+            "confidence": confidence,
+            "reasons": reasons,
+            "last_price": round(float(df["close"].iloc[-1]), 2),
+            "bars_received": len(df)
+        }
+
+    except Exception as e:
+        return {
+            "symbol": symbol,
+            "signal": "hold",
+            "score": 0,
+            "confidence": "error",
+            "reason": str(e)
+        }
+
+
+def run_bot(tier_name, execute=False):
+    tier_config = TIERS.get(tier_name, TIERS["starter"])
     results = []
 
-    for symbol in tier["symbols"]:
-        data = score_symbol(symbol)
+    for symbol in tier_config["symbols"]:
+        data = generate_signal(symbol, tier_config)
+        order_status = "not_executed"
 
-        if data["signal"] == "buy" and data["score"] < tier["min_score_buy"]:
-            data["signal"] = "hold"
-            data["blocked_reason"] = "score_below_tier_buy_threshold"
+        if execute and AUTO_TRADE and tier_config["auto_trade"]:
+            try:
+                if data["signal"] == "buy":
+                    api.submit_order(
+                        symbol=symbol,
+                        qty=1,
+                        side="buy",
+                        type="market",
+                        time_in_force="gtc"
+                    )
+                    order_status = "buy_order_sent"
 
-        if data["signal"] == "sell" and data["score"] > tier["max_score_sell"]:
-            data["signal"] = "hold"
-            data["blocked_reason"] = "score_above_tier_sell_threshold"
+                elif data["signal"] == "sell":
+                    api.submit_order(
+                        symbol=symbol,
+                        qty=1,
+                        side="sell",
+                        type="market",
+                        time_in_force="gtc"
+                    )
+                    order_status = "sell_order_sent"
 
+            except Exception as e:
+                order_status = f"order_error: {str(e)}"
+
+        data["order_status"] = order_status
         results.append(data)
 
-    return results
-
-# =========================
-# TRADE EXECUTION
-# =========================
-def execute_trades(tier_name):
-    tier = TIERS.get(tier_name, TIERS["starter"])
-    signals = run_signals(tier_name)
-    executed = []
-
-    if not AUTO_TRADE:
-        return {
-            "auto_trade": False,
-            "message": "AUTO_TRADE is off. Signals only.",
-            "signals": signals
-        }
-
-    if not tier["auto_trade"]:
-        return {
-            "auto_trade": False,
-            "message": "This tier does not allow auto trading.",
-            "signals": signals
-        }
-
-    for item in signals:
-        symbol = item["symbol"]
-        signal = item["signal"]
-
-        try:
-            if signal == "buy":
-                api.submit_order(
-                    symbol=symbol,
-                    qty=1,
-                    side="buy",
-                    type="market",
-                    time_in_force="gtc"
-                )
-                executed.append({"symbol": symbol, "action": "buy", "status": "submitted"})
-
-            elif signal == "sell":
-                api.submit_order(
-                    symbol=symbol,
-                    qty=1,
-                    side="sell",
-                    type="market",
-                    time_in_force="gtc"
-                )
-                executed.append({"symbol": symbol, "action": "sell", "status": "submitted"})
-
-        except Exception as e:
-            executed.append({"symbol": symbol, "action": signal, "status": "error", "error": str(e)})
-
     return {
-        "auto_trade": True,
         "tier": tier_name,
-        "executed": executed,
-        "signals": signals
+        "auto_trade": AUTO_TRADE and tier_config["auto_trade"],
+        "signals": results
     }
 
-# =========================
-# ROUTES
-# =========================
+
 @app.route("/")
 def home():
     return jsonify({
         "status": "AI STOCK AGENT RUNNING",
-        "routes": ["/signals?tier=pro", "/trade?tier=ultra", "/tiers"],
-        "auto_trade": AUTO_TRADE
+        "auto_trade": AUTO_TRADE,
+        "routes": [
+            "/signals?tier=pro",
+            "/trade?tier=ultra",
+            "/tiers",
+            "/debug"
+        ]
     })
+
 
 @app.route("/signals")
 def signals():
-    tier = request.args.get("tier", "starter").lower()
-    return jsonify({
-        "tier": tier,
-        "auto_trade": False,
-        "signals": run_signals(tier)
-    })
+    tier = request.args.get("tier", "starter")
+    return jsonify(run_bot(tier, execute=False))
+
 
 @app.route("/trade")
 def trade():
-    tier = request.args.get("tier", "starter").lower()
-    return jsonify(execute_trades(tier))
+    tier = request.args.get("tier", "starter")
+    return jsonify(run_bot(tier, execute=True))
+
 
 @app.route("/tiers")
 def tiers():
     return jsonify(TIERS)
 
-# =========================
-# START
-# =========================
+
+@app.route("/debug")
+def debug():
+    return jsonify({
+        "api_key_loaded": API_KEY is not None and len(API_KEY) > 5,
+        "secret_key_loaded": SECRET_KEY is not None and len(SECRET_KEY) > 5,
+        "auto_trade": AUTO_TRADE,
+        "base_url": BASE_URL
+    })
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
