@@ -1,3 +1,4 @@
+
 from flask import Flask, jsonify, request, render_template_string
 import os
 from datetime import datetime, timezone
@@ -197,12 +198,24 @@ TIER_CONFIGS = {
     }
 }
 
+# Payment-first access keys.
+# Give these keys only AFTER payment/trial checkout is completed.
+# For real launch, move keys into a database or environment variables.
 LICENSE_KEYS = {
-    "STARTER-DEMO": "starter",
-    "PRO-DEMO": "pro",
-    "ELITE-DEMO": "elite",
-    "ULTRA-DEMO": "ultra",
-    "MASTER-DEMO": "mastery_plus"
+    "STARTER-TRIAL-PAID": "starter",
+    "PRO-TRIAL-PAID": "pro",
+    "PRO-PAID": "pro",
+    "ELITE-PAID": "elite",
+    "ULTRA-PAID": "ultra",
+    "MASTER-PAID": "mastery_plus"
+}
+
+PAYMENT_LINKS = {
+    "starter": "PUT_YOUR_STARTER_TRIAL_PAYMENT_LINK_HERE",
+    "pro": "PUT_YOUR_PRO_PAYMENT_LINK_HERE",
+    "elite": "PUT_YOUR_ELITE_PAYMENT_LINK_HERE",
+    "ultra": "PUT_YOUR_ULTRA_PAYMENT_LINK_HERE",
+    "mastery_plus": "PUT_YOUR_MASTERY_PLUS_PAYMENT_LINK_HERE"
 }
 
 
@@ -222,9 +235,8 @@ def tier_from_key(key):
 
 
 def can_access_tier(requested_tier, key):
-    if requested_tier == "starter":
-        return True
-
+    # Payment-first rule:
+    # No key means NO trial unlock, not even Starter.
     unlocked = tier_from_key(key)
     if not unlocked:
         return False
@@ -233,11 +245,17 @@ def can_access_tier(requested_tier, key):
 
 
 def locked_response(requested_tier):
+    cfg = get_config(requested_tier)
     return jsonify({
         "locked": True,
+        "payment_required": True,
         "requested_tier": requested_tier,
-        "message": "Enter a valid license key to unlock this tier.",
-        "hint": "Use PRO-DEMO, ELITE-DEMO, ULTRA-DEMO, or MASTER-DEMO while testing."
+        "tier_name": cfg["name"],
+        "price": cfg["price"],
+        "trial": cfg["trial"],
+        "checkout_link": PAYMENT_LINKS.get(requested_tier, ""),
+        "message": "Payment method required before trial unlock. Complete checkout, then enter your license key.",
+        "next_step": "Replace the checkout_link placeholder in main.py with your real payment link."
     }), 403
 
 
@@ -826,7 +844,7 @@ def dashboard():
             </div>
             <div class="card" style="min-width:320px;">
                 <h3>License Access</h3>
-                <p class="muted">No key = Starter only. Demo keys work for testing.</p>
+                <p class="muted">Payment method required before trial unlock. Enter the license key received after checkout.</p>
                 <div class="actions">
                     <input id="licenseInput" placeholder="Enter license key">
                     <button onclick="saveKey()" class="green">Unlock</button>
@@ -940,7 +958,7 @@ function lockedHTML(err) {
         <div class="notice">
             <h3>Tier locked</h3>
             <p>${err.message || "Enter a valid license key."}</p>
-            <p><b>Testing keys:</b> PRO-DEMO, ELITE-DEMO, ULTRA-DEMO, MASTER-DEMO</p>
+            <p><b>Next step:</b> Complete checkout, then enter your license key to unlock your trial or paid tier.</p>
         </div>
     `;
 }
@@ -1211,13 +1229,13 @@ def status():
         "routes": [
             "/",
             "/tiers",
-            "/signals?tier=pro&key=PRO-DEMO",
-            "/signals?tier=mastery_plus&key=MASTER-DEMO",
-            "/trade?tier=ultra&mode=paper&key=ULTRA-DEMO",
-            "/portfolio?tier=ultra&key=ULTRA-DEMO",
-            "/report?tier=mastery_plus&key=MASTER-DEMO",
+            "/signals?tier=pro&key=PRO-PAID",
+            "/signals?tier=mastery_plus&key=MASTER-PAID",
+            "/trade?tier=ultra&mode=paper&key=ULTRA-PAID",
+            "/portfolio?tier=ultra&key=ULTRA-PAID",
+            "/report?tier=mastery_plus&key=MASTER-PAID",
             "/chart-data?symbol=AAPL",
-            "/license?key=PRO-DEMO",
+            "/license?key=PRO-PAID",
             "/debug"
         ]
     })
@@ -1318,7 +1336,7 @@ def license_check():
     tier = tier_from_key(key)
 
     if not tier:
-        return jsonify({"valid": False, "tier": None, "name": "Starter only"})
+        return jsonify({"valid": False, "tier": None, "name": "Payment required", "message": "Complete checkout first, then enter your license key."})
 
     return jsonify({
         "valid": True,
