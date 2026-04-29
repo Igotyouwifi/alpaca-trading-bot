@@ -2060,10 +2060,7 @@ def status():
     })
 
 
-@app.route("/broker/connect",
-            "/broker/status",
-            "/broker/disconnect",
-            "/debug")
+@app.route("/debug")
 def debug():
     return jsonify({
         "api_key_loaded": bool(API_KEY),
