@@ -78,17 +78,45 @@ def get_data(symbol):
         bars = api.get_bars(
             symbol,
             TIMEFRAME,
-            limit=150,
+            limit=100,
             feed="iex"
         ).df
 
-        if bars.empty:
-            return pd.DataFrame()
+        if bars is not None and not bars.empty:
+            return bars
 
-        return bars
+        print(f"ALPACA EMPTY DATA FOR {symbol}, USING YFINANCE FALLBACK")
 
     except Exception as e:
-        print(f"DATA ERROR {symbol}: {e}")
+        print(f"ALPACA DATA ERROR FOR {symbol}: {e}")
+
+    try:
+        import yfinance as yf
+
+        yf_df = yf.download(
+            symbol,
+            period="5d",
+            interval="1m",
+            progress=False,
+            auto_adjust=False
+        )
+
+        if yf_df is None or yf_df.empty:
+            print(f"YFINANCE ALSO EMPTY FOR {symbol}")
+            return pd.DataFrame()
+
+        yf_df = yf_df.rename(columns={
+            "Open": "open",
+            "High": "high",
+            "Low": "low",
+            "Close": "close",
+            "Volume": "volume"
+        })
+
+        return yf_df[["open", "high", "low", "close", "volume"]]
+
+    except Exception as e:
+        print(f"YFINANCE ERROR FOR {symbol}: {e}")
         return pd.DataFrame()
 
 # =========================
