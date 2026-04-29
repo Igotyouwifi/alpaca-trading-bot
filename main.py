@@ -5,16 +5,20 @@ import alpaca_trade_api as tradeapi
 
 app = Flask(__name__)
 
+# =========================
+# CONFIG
+# =========================
 API_KEY = os.getenv("ALPACA_API_KEY")
 SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
 BASE_URL = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
-
 AUTO_TRADE = os.getenv("AUTO_TRADE", "false").lower() == "true"
-
 TIMEFRAME = "1Min"
 
-api = tradeapi.REST(API_KEY, SECRET_KEY, BASE_URL)
+api = tradeapi.REST(API_KEY, SECRET_KEY, BASE_URL) if API_KEY and SECRET_KEY else None
 
+# =========================
+# TIERS
+# =========================
 TIERS = {
     "starter": {
         "price": "$0/month",
@@ -30,7 +34,7 @@ TIERS = {
         "min_score_buy": 75,
         "max_score_sell": 25,
         "auto_trade": False,
-        "features": ["advanced signals", "RSI", "MACD", "volume filter"]
+        "features": ["RSI", "MACD", "volume filter", "advanced scoring"]
     },
     "elite": {
         "price": "$29.99/month",
@@ -38,7 +42,7 @@ TIERS = {
         "min_score_buy": 70,
         "max_score_sell": 30,
         "auto_trade": False,
-        "features": ["stronger scoring", "more stocks", "confidence engine"]
+        "features": ["more stocks", "stronger scoring", "better filters"]
     },
     "ultra": {
         "price": "$59.99/month",
@@ -46,7 +50,7 @@ TIERS = {
         "min_score_buy": 68,
         "max_score_sell": 32,
         "auto_trade": True,
-        "features": ["full automation", "auto trading allowed", "advanced scoring"]
+        "features": ["automation access", "advanced scoring", "premium signals"]
     },
     "mastery_plus": {
         "price": "$499/month",
@@ -54,27 +58,30 @@ TIERS = {
         "min_score_buy": 65,
         "max_score_sell": 35,
         "auto_trade": True,
-        "features": ["top tier", "largest symbol list", "automation", "premium signal engine"]
+        "features": ["top tier", "largest stock list", "automation", "premium signal engine"]
     }
 }
 
-
+# =========================
+# DATA ENGINE
+# =========================
 def get_data(symbol):
-    try:
-        bars = api.get_bars(
-            symbol,
-            TIMEFRAME,
-            limit=100,
-            feed="iex"
-        ).df
+    if api:
+        try:
+            bars = api.get_bars(
+                symbol,
+                TIMEFRAME,
+                limit=100,
+                feed="iex"
+            ).df
 
-        if bars is not None and not bars.empty:
-            return bars[["open", "high", "low", "close", "volume"]]
+            if bars is not None and not bars.empty:
+                return bars[["open", "high", "low", "close", "volume"]]
 
-        print(f"ALPACA EMPTY DATA FOR {symbol}")
+            print(f"ALPACA EMPTY DATA FOR {symbol}")
 
-    except Exception as e:
-        print(f"ALPACA DATA ERROR FOR {symbol}: {e}")
+        except Exception as e:
+            print(f"ALPACA DATA ERROR FOR {symbol}: {e}")
 
     try:
         import yfinance as yf
@@ -113,7 +120,9 @@ def get_data(symbol):
         print(f"YFINANCE ERROR FOR {symbol}: {e}")
         return pd.DataFrame()
 
-
+# =========================
+# INDICATORS
+# =========================
 def calculate_indicators(df):
     df = df.copy()
 
@@ -134,11 +143,11 @@ def calculate_indicators(df):
 
     df["avg_volume"] = df["volume"].rolling(20).mean()
 
-    df = df.dropna()
+    return df.dropna()
 
-    return df
-
-
+# =========================
+# AI-STYLE SCORING ENGINE
+# =========================
 def score_symbol(df, tier_config):
     latest = df.iloc[-1]
     score = 50
@@ -203,7 +212,9 @@ def score_symbol(df, tier_config):
 
     return score, signal, confidence, reasons
 
-
+# =========================
+# SIGNAL GENERATOR
+# =========================
 def generate_signal(symbol, tier_config):
     try:
         df = get_data(symbol)
@@ -214,7 +225,8 @@ def generate_signal(symbol, tier_config):
                 "signal": "hold",
                 "score": 0,
                 "confidence": "none",
-                "reason": "no_data_available"
+                "reason": "no_data_available",
+                "order_status": "not_executed"
             }
 
         if len(df) < 30:
@@ -224,7 +236,8 @@ def generate_signal(symbol, tier_config):
                 "score": 0,
                 "confidence": "none",
                 "bars_received": len(df),
-                "reason": "not_enough_market_data"
+                "reason": "not_enough_market_data",
+                "order_status": "not_executed"
             }
 
         df = calculate_indicators(df)
@@ -235,7 +248,8 @@ def generate_signal(symbol, tier_config):
                 "signal": "hold",
                 "score": 0,
                 "confidence": "none",
-                "reason": "not_enough_indicator_data"
+                "reason": "not_enough_indicator_data",
+                "order_status": "not_executed"
             }
 
         score, signal, confidence, reasons = score_symbol(df, tier_config)
@@ -247,7 +261,8 @@ def generate_signal(symbol, tier_config):
             "confidence": confidence,
             "reasons": reasons,
             "last_price": round(float(df["close"].iloc[-1]), 2),
-            "bars_received": len(df)
+            "bars_received": len(df),
+            "order_status": "not_executed"
         }
 
     except Exception as e:
@@ -256,10 +271,13 @@ def generate_signal(symbol, tier_config):
             "signal": "hold",
             "score": 0,
             "confidence": "error",
-            "reason": str(e)
+            "reason": str(e),
+            "order_status": "not_executed"
         }
 
-
+# =========================
+# BOT RUNNER
+# =========================
 def run_bot(tier_name, execute=False):
     tier_config = TIERS.get(tier_name, TIERS["starter"])
     results = []
@@ -268,7 +286,7 @@ def run_bot(tier_name, execute=False):
         data = generate_signal(symbol, tier_config)
         order_status = "not_executed"
 
-        if execute and AUTO_TRADE and tier_config["auto_trade"]:
+        if execute and AUTO_TRADE and tier_config["auto_trade"] and api:
             try:
                 if data["signal"] == "buy":
                     api.submit_order(
@@ -302,13 +320,16 @@ def run_bot(tier_name, execute=False):
         "signals": results
     }
 
-
+# =========================
+# ROUTES
+# =========================
 @app.route("/")
 def home():
     return jsonify({
         "status": "AI STOCK AGENT RUNNING",
         "auto_trade": AUTO_TRADE,
         "routes": [
+            "/dashboard",
             "/signals?tier=pro",
             "/trade?tier=ultra",
             "/tiers",
@@ -316,23 +337,19 @@ def home():
         ]
     })
 
-
 @app.route("/signals")
 def signals():
     tier = request.args.get("tier", "starter")
     return jsonify(run_bot(tier, execute=False))
-
 
 @app.route("/trade")
 def trade():
     tier = request.args.get("tier", "starter")
     return jsonify(run_bot(tier, execute=True))
 
-
 @app.route("/tiers")
 def tiers():
     return jsonify(TIERS)
-
 
 @app.route("/debug")
 def debug():
@@ -343,6 +360,105 @@ def debug():
         "base_url": BASE_URL
     })
 
+@app.route("/dashboard")
+def dashboard():
+    return """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>AI Stock Agent Dashboard</title>
+        <style>
+            body {
+                background: #0f172a;
+                color: white;
+                font-family: Arial, sans-serif;
+                padding: 30px;
+            }
+            h1 {
+                color: #38bdf8;
+            }
+            button {
+                padding: 10px 15px;
+                margin: 5px;
+                border: none;
+                border-radius: 8px;
+                background: #38bdf8;
+                color: black;
+                font-weight: bold;
+                cursor: pointer;
+            }
+            .card {
+                background: #1e293b;
+                padding: 20px;
+                margin: 15px 0;
+                border-radius: 12px;
+            }
+            .buy {
+                color: #22c55e;
+                font-weight: bold;
+            }
+            .sell {
+                color: #ef4444;
+                font-weight: bold;
+            }
+            .hold, .watch_buy, .watch_sell {
+                color: #facc15;
+                font-weight: bold;
+            }
+            .score {
+                font-size: 22px;
+                font-weight: bold;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>AI Stock Agent Dashboard</h1>
+        <p>Status: Running</p>
 
+        <button onclick="loadSignals('starter')">Starter</button>
+        <button onclick="loadSignals('pro')">Pro</button>
+        <button onclick="loadSignals('elite')">Elite</button>
+        <button onclick="loadSignals('ultra')">Ultra</button>
+        <button onclick="loadSignals('mastery_plus')">Mastery Plus</button>
+
+        <div id="signals"></div>
+
+        <script>
+            async function loadSignals(tier) {
+                document.getElementById("signals").innerHTML = "<p>Loading...</p>";
+
+                const res = await fetch("/signals?tier=" + tier);
+                const data = await res.json();
+
+                let html = "<h2>Tier: " + data.tier + "</h2>";
+                html += "<p>Auto Trade: " + data.auto_trade + "</p>";
+
+                data.signals.forEach(s => {
+                    html += `
+                        <div class="card">
+                            <h2>${s.symbol}</h2>
+                            <p>Signal: <span class="${s.signal}">${s.signal}</span></p>
+                            <p class="score">Score: ${s.score}</p>
+                            <p>Confidence: ${s.confidence}</p>
+                            <p>Last Price: $${s.last_price || "N/A"}</p>
+                            <p>Reasons: ${(s.reasons || [s.reason || "none"]).join(", ")}</p>
+                            <p>Bars Received: ${s.bars_received || "N/A"}</p>
+                            <p>Order Status: ${s.order_status}</p>
+                        </div>
+                    `;
+                });
+
+                document.getElementById("signals").innerHTML = html;
+            }
+
+            loadSignals("pro");
+        </script>
+    </body>
+    </html>
+    """
+
+# =========================
+# START
+# =========================
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
