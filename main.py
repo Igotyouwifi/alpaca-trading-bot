@@ -782,6 +782,25 @@ def dashboard():
             transition: background .45s ease, color .25s ease;
         }
         .wrap { max-width: 1480px; margin: auto; padding: 24px; }
+        .warning-top {
+            display:flex;
+            justify-content:space-between;
+            gap:14px;
+            align-items:center;
+            margin-bottom:16px;
+            padding:14px 16px;
+            border-radius:18px;
+            border:1px solid rgba(245,158,11,.35);
+            background:linear-gradient(135deg, rgba(245,158,11,.18), rgba(15,23,42,.72));
+            color:#fde68a;
+            box-shadow: 0 10px 34px rgba(0,0,0,.22);
+        }
+        .warning-mini {
+            color:#fef3c7;
+            font-size:13px;
+            font-weight:800;
+            white-space:nowrap;
+        }
         .hero {
             position: relative;
             overflow: hidden;
@@ -1007,16 +1026,82 @@ def dashboard():
             color:#fde68a;
         }
         .footer-note { color: var(--muted); font-size: 12px; }
+        .theme-picker-wrap {
+            margin-top:18px;
+            padding:16px;
+            border-radius:22px;
+            border:1px solid rgba(255,255,255,.08);
+            background: rgba(255,255,255,.035);
+            position:relative;
+            z-index:1;
+        }
+        .theme-picker {
+            display:grid;
+            grid-template-columns: repeat(auto-fit, minmax(165px, 1fr));
+            gap:10px;
+        }
+        .theme-option {
+            text-align:left;
+            border:1px solid rgba(255,255,255,.10);
+            background:rgba(255,255,255,.04);
+            color:var(--text);
+            border-radius:18px;
+            padding:13px;
+            box-shadow:none;
+        }
+        .theme-option:hover {
+            border-color:var(--accent);
+            box-shadow:0 0 0 4px var(--glow);
+        }
+        .theme-option.locked {
+            opacity:.45;
+            cursor:not-allowed;
+            filter:grayscale(.2);
+        }
+        .theme-option.active {
+            border-color:var(--accent);
+            box-shadow:0 0 0 4px var(--glow), 0 14px 32px rgba(0,0,0,.24);
+        }
+        .theme-dot {
+            width:28px;
+            height:28px;
+            border-radius:10px;
+            display:inline-flex;
+            align-items:center;
+            justify-content:center;
+            margin-bottom:8px;
+            background:linear-gradient(135deg,var(--accent),var(--accent2));
+            color:white;
+            font-size:15px;
+        }
+        .theme-option-title {
+            font-weight:900;
+            display:block;
+            margin-bottom:3px;
+        }
+        .theme-option-sub {
+            color:var(--muted);
+            font-size:12px;
+        }
         @media (max-width: 920px) {
             .split { grid-template-columns:1fr; }
             .wrap { padding: 16px; }
             .hero { padding: 20px; }
             .tier-glance { grid-template-columns: 1fr; }
+            .warning-top { flex-direction:column; align-items:flex-start; }
+            .warning-mini { white-space:normal; }
         }
     </style>
 </head>
 <body>
 <div class="wrap">
+    <section class="warning-top">
+        <div>
+            <b>Important:</b> Paper mode is simulation only. Signals are not guaranteed profit. Live trading stays locked unless you manually enable it. Free trials require payment method + license key.
+        </div>
+        <div class="warning-mini">Never share API keys or license keys.</div>
+    </section>
+
     <section class="hero" id="heroCard">
         <div class="topbar">
             <div>
@@ -1025,17 +1110,17 @@ def dashboard():
                     <div class="badge theme-badge" id="themeBadge">Starter Theme Active</div>
                 </div>
                 <h1>AI Stock Agent Dashboard</h1>
-                <p id="heroCopy">Clean signals, tier access, crypto, internal paper trading, safety rules, reports, and premium charts.</p>
+                <p id="heroCopy">Signals, crypto, paper trading, reports, portfolio charts, and tier-based themes.</p>
                 <div class="tier-glance">
-                    <div class="mini-stat"><span class="k">Current Theme</span><span class="v" id="miniTier">Starter</span></div>
-                    <div class="mini-stat"><span class="k">Accent Style</span><span class="v" id="miniAccent">Neon Blue</span></div>
-                    <div class="mini-stat"><span class="k">Access Mode</span><span class="v" id="miniMode">Locked</span></div>
+                    <div class="mini-stat"><span class="k">Active Tier</span><span class="v" id="miniTier">Starter</span></div>
+                    <div class="mini-stat"><span class="k">Theme</span><span class="v" id="miniAccent">Neon Blue</span></div>
+                    <div class="mini-stat"><span class="k">Access</span><span class="v" id="miniMode">Locked</span></div>
                 </div>
             </div>
-            <div class="card theme-card" style="min-width:340px; max-width:430px; width:100%;">
+            <div class="card theme-card" style="min-width:340px; max-width:460px; width:100%;">
                 <div class="tier-emblem" id="tierEmblem">â¦</div>
                 <h3 id="tierCardTitle">License Access</h3>
-                <p class="muted">Payment method required before trial unlock. Enter the license key received after checkout.</p>
+                <p class="muted">Enter the license key received after checkout to unlock trial or paid access.</p>
                 <div class="actions">
                     <input id="licenseInput" placeholder="Enter license key">
                     <button onclick="saveKey()" class="green">Unlock</button>
@@ -1043,7 +1128,6 @@ def dashboard():
                 </div>
                 <div class="theme-line"></div>
                 <p id="licenseStatus" class="muted"></p>
-                <p class="footer-note">Each tier now has its own visual theme so upgrades feel premium.</p>
             </div>
         </div>
 
@@ -1053,9 +1137,20 @@ def dashboard():
             <button id="btn-elite" class="tier-btn" onclick="loadTier('elite')">Elite</button>
             <button id="btn-ultra" class="tier-btn" onclick="loadTier('ultra')">Ultra</button>
             <button id="btn-mastery_plus" class="tier-btn gold" onclick="loadTier('mastery_plus')">Mastery Plus</button>
-            <button onclick="loadTiers()" class="dark">All Tiers</button>
-            <button onclick="loadReport()" class="dark">Daily Report</button>
+            <button onclick="loadTiers()" class="dark">Plans</button>
+            <button onclick="loadReport()" class="dark">Report</button>
             <button onclick="loadStatus()" class="dark">Status</button>
+        </div>
+
+        <div class="theme-picker-wrap">
+            <div class="section-head">
+                <div>
+                    <h3>Choose Theme</h3>
+                    <p class="muted">Available themes depend on the tier you unlock.</p>
+                </div>
+                <div class="theme-strip" id="themeAccessChips"></div>
+            </div>
+            <div class="theme-picker" id="themePicker"></div>
         </div>
     </section>
 
@@ -1119,7 +1214,10 @@ def dashboard():
 <script>
 let currentTier = localStorage.getItem("tier") || "starter";
 let licenseKey = localStorage.getItem("licenseKey") || "";
+let selectedTheme = localStorage.getItem("selectedTheme") || "";
 let charts = {};
+
+const TIER_RANK = ["starter", "pro", "elite", "ultra", "mastery_plus"];
 
 const TIER_THEMES = {
     starter: {
@@ -1219,6 +1317,20 @@ const TIER_THEMES = {
     }
 };
 
+function rankOf(tier) {
+    const i = TIER_RANK.indexOf(tier);
+    return i < 0 ? 0 : i;
+}
+
+function themeAllowed(themeTier) {
+    return rankOf(themeTier) <= rankOf(currentTier);
+}
+
+function effectiveTheme(tier) {
+    if (selectedTheme && themeAllowed(selectedTheme)) return selectedTheme;
+    return tier;
+}
+
 document.getElementById("licenseInput").value = licenseKey;
 
 function money(v) { return "$" + Number(v || 0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2}); }
@@ -1234,12 +1346,13 @@ function badgeClass(signal) {
 }
 
 function applyTheme(tier) {
-    const theme = TIER_THEMES[tier] || TIER_THEMES.starter;
+    const activeThemeKey = effectiveTheme(tier);
+    const theme = TIER_THEMES[activeThemeKey] || TIER_THEMES.starter;
     const root = document.documentElement;
     Object.entries(theme.css).forEach(([k, v]) => root.style.setProperty(k, v));
 
     document.getElementById("themeBadge").innerText = theme.label + " Active";
-    document.getElementById("miniTier").innerText = theme.label.replace(" Theme", "");
+    document.getElementById("miniTier").innerText = (TIER_THEMES[tier] || TIER_THEMES.starter).label.replace(" Theme", "");
     document.getElementById("miniAccent").innerText = theme.accentName;
     document.getElementById("miniMode").innerText = licenseKey ? "Unlocked" : "Locked";
     document.getElementById("tierEmblem").innerText = theme.emblem;
@@ -1250,6 +1363,42 @@ function applyTheme(tier) {
     document.querySelectorAll('.tier-btn').forEach(btn => btn.classList.remove('active'));
     const activeBtn = document.getElementById('btn-' + tier);
     if (activeBtn) activeBtn.classList.add('active');
+
+    renderThemePicker();
+}
+
+function chooseTheme(themeTier) {
+    if (!themeAllowed(themeTier)) return;
+    selectedTheme = themeTier;
+    localStorage.setItem("selectedTheme", selectedTheme);
+    applyTheme(currentTier);
+}
+
+function renderThemePicker() {
+    const box = document.getElementById("themePicker");
+    const chips = document.getElementById("themeAccessChips");
+    if (!box) return;
+
+    box.innerHTML = TIER_RANK.map(tierKey => {
+        const theme = TIER_THEMES[tierKey];
+        const allowed = themeAllowed(tierKey);
+        const active = effectiveTheme(currentTier) === tierKey;
+        return `
+            <button class="theme-option ${allowed ? "" : "locked"} ${active ? "active" : ""}" onclick="chooseTheme('${tierKey}')" ${allowed ? "" : "disabled"}>
+                <span class="theme-dot">${theme.emblem}</span>
+                <span class="theme-option-title">${theme.label.replace(" Theme", "")}</span>
+                <span class="theme-option-sub">${allowed ? theme.accentName : "Unlock higher tier"}</span>
+            </button>
+        `;
+    }).join("");
+
+    if (chips) {
+        const unlockedCount = TIER_RANK.filter(themeAllowed).length;
+        chips.innerHTML = `
+            <span class="theme-chip">${unlockedCount}/5 themes unlocked</span>
+            <span class="theme-chip">Current tier: ${(TIER_THEMES[currentTier] || TIER_THEMES.starter).label.replace(" Theme", "")}</span>
+        `;
+    }
 }
 
 function accessText(valid, name) {
@@ -1342,7 +1491,6 @@ async function loadTier(tier) {
 
     document.getElementById("stats").innerHTML = `
         <div class="stat"><div class="label">Trial</div><div class="value">${t.trial}</div></div>
-        <div class="stat"><div class="label">Discount</div><div class="value">${t.welcome_discount}</div></div>
         <div class="stat"><div class="label">Paper Trading</div><div class="value">${t.paper_trading}</div></div>
         <div class="stat"><div class="label">Live Trading</div><div class="value">${t.live_trading_allowed}</div></div>
         <div class="stat"><div class="label">Buy</div><div class="value">${buyCount}</div></div>
@@ -1462,7 +1610,6 @@ async function loadTiers() {
                 <h3>${t.name}</h3>
                 <p><b>Price:</b> ${t.price}</p>
                 <p><b>Trial:</b> ${t.trial}</p>
-                <p><b>Discount:</b> ${t.welcome_discount}</p>
                 <p><b>Stocks:</b> ${t.symbols.length}</p>
                 <p><b>Crypto:</b> ${t.crypto_symbols.length}</p>
                 <p><b>Theme:</b> ${theme.accentName}</p>
