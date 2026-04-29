@@ -1,4 +1,3 @@
-
 from flask import Flask, jsonify, request, render_template_string
 import os
 from datetime import datetime, timezone
@@ -751,70 +750,192 @@ def dashboard():
     <style>
         :root {
             --bg: #060914;
-            --panel: rgba(15, 23, 42, .92);
-            --panel2: #0f172a;
+            --bg2: #0b1020;
+            --panel: rgba(10, 16, 30, .90);
+            --panel2: rgba(15, 23, 42, .94);
             --border: rgba(148, 163, 184, .22);
             --text: #eef2ff;
+            --soft: #dbeafe;
             --muted: #94a3b8;
-            --blue: #3b82f6;
-            --green: #10b981;
-            --red: #ef4444;
-            --yellow: #f59e0b;
+            --accent: #4f7cff;
+            --accent2: #7c3aed;
+            --accent3: #22c55e;
+            --glow: rgba(79, 124, 255, .28);
+            --heroA: rgba(79,124,255,.22);
+            --heroB: rgba(124,58,237,.18);
+            --heroC: rgba(34,197,94,.14);
+            --buttonText: #ffffff;
+            --shadow: rgba(0,0,0,.38);
         }
         * { box-sizing: border-box; }
+        html { scroll-behavior: smooth; }
         body {
             margin: 0;
             font-family: Inter, Arial, sans-serif;
+            min-height: 100vh;
             background:
-                radial-gradient(circle at 15% 15%, rgba(37,99,235,.28), transparent 34%),
-                radial-gradient(circle at 90% 10%, rgba(16,185,129,.18), transparent 30%),
-                linear-gradient(180deg, #060914, #0b1020 45%, #070a12);
+                radial-gradient(circle at 8% 10%, var(--heroA), transparent 28%),
+                radial-gradient(circle at 88% 12%, var(--heroB), transparent 30%),
+                radial-gradient(circle at 60% 80%, var(--heroC), transparent 26%),
+                linear-gradient(180deg, var(--bg), var(--bg2) 55%, #050811);
             color: var(--text);
+            transition: background .45s ease, color .25s ease;
         }
-        .wrap { max-width: 1450px; margin: auto; padding: 20px; }
+        .wrap { max-width: 1480px; margin: auto; padding: 24px; }
         .hero {
+            position: relative;
+            overflow: hidden;
             border: 1px solid var(--border);
-            border-radius: 28px;
-            padding: 26px;
-            background: linear-gradient(135deg, rgba(15,23,42,.94), rgba(30,41,59,.78));
-            box-shadow: 0 24px 90px rgba(0,0,0,.35);
+            border-radius: 30px;
+            padding: 28px;
+            background:
+                linear-gradient(135deg, rgba(8,12,24,.92), rgba(16,24,40,.84)),
+                linear-gradient(135deg, var(--heroA), transparent 48%);
+            box-shadow: 0 24px 90px var(--shadow), inset 0 1px 0 rgba(255,255,255,.03);
             margin-bottom: 18px;
         }
-        .topbar { display:flex; justify-content:space-between; gap:16px; flex-wrap:wrap; align-items:flex-start; }
-        h1 { margin: 0 0 8px; font-size: clamp(28px, 4vw, 48px); letter-spacing: -1px; }
-        h2 { margin: 0 0 14px; }
+        .hero::before {
+            content: "";
+            position: absolute;
+            right: -80px;
+            top: -80px;
+            width: 260px;
+            height: 260px;
+            border-radius: 50%;
+            background: radial-gradient(circle, var(--glow), transparent 65%);
+            filter: blur(18px);
+            pointer-events: none;
+        }
+        .hero::after {
+            content: "";
+            position: absolute;
+            left: -50px;
+            bottom: -70px;
+            width: 220px;
+            height: 220px;
+            border-radius: 50%;
+            background: radial-gradient(circle, var(--heroB), transparent 70%);
+            filter: blur(14px);
+            pointer-events: none;
+        }
+        .topbar { display:flex; justify-content:space-between; gap:16px; flex-wrap:wrap; align-items:flex-start; position:relative; z-index:1; }
+        h1 { margin: 0 0 8px; font-size: clamp(30px, 4vw, 52px); line-height: 1; letter-spacing: -1.4px; }
+        h2 { margin: 0 0 14px; font-size: 28px; }
         h3 { margin: 0 0 10px; }
         p { color:#cbd5e1; }
-        .badge { display:inline-flex; gap:8px; align-items:center; padding:8px 12px; border:1px solid var(--border); border-radius:999px; background:rgba(15,23,42,.8); color:#dbeafe; font-weight:700; }
-        .tabs { display:flex; flex-wrap:wrap; gap:10px; margin-top:18px; }
-        button, input {
-            border:0; border-radius:14px; padding:12px 15px; font-weight:800;
+        .badge {
+            display:inline-flex;
+            gap:8px;
+            align-items:center;
+            padding:8px 12px;
+            border:1px solid rgba(255,255,255,.08);
+            border-radius:999px;
+            background:rgba(255,255,255,.05);
+            color:var(--soft);
+            font-weight:800;
+            backdrop-filter: blur(10px);
         }
-        button { cursor:pointer; color:white; background:linear-gradient(135deg,#2563eb,#3b82f6); }
-        button:hover { filter:brightness(1.12); transform:translateY(-1px); }
-        button.dark { background:#1f2937; border:1px solid var(--border); }
+        .hero-meta {
+            display:flex;
+            flex-wrap:wrap;
+            gap:10px;
+            margin:14px 0 0;
+        }
+        .theme-badge {
+            background: linear-gradient(135deg, rgba(255,255,255,.10), rgba(255,255,255,.04));
+            border-color: rgba(255,255,255,.12);
+        }
+        .tier-glance {
+            display:grid;
+            grid-template-columns: repeat(3, minmax(120px,1fr));
+            gap:10px;
+            margin-top:16px;
+            max-width: 560px;
+        }
+        .mini-stat {
+            border:1px solid rgba(255,255,255,.08);
+            background: rgba(255,255,255,.04);
+            border-radius: 16px;
+            padding: 12px;
+            backdrop-filter: blur(10px);
+        }
+        .mini-stat .k { color: var(--muted); font-size: 12px; display:block; margin-bottom: 5px; }
+        .mini-stat .v { font-size: 18px; font-weight: 900; color: var(--soft); }
+        .tabs {
+            display:flex;
+            flex-wrap:wrap;
+            gap:10px;
+            margin-top:18px;
+            position:relative;
+            z-index:1;
+        }
+        button, input {
+            border:0;
+            border-radius:14px;
+            padding:12px 15px;
+            font-weight:800;
+        }
+        button {
+            cursor:pointer;
+            color:var(--buttonText);
+            background:linear-gradient(135deg,var(--accent),var(--accent2));
+            box-shadow: 0 12px 28px rgba(0,0,0,.18);
+            transition: transform .18s ease, filter .18s ease, box-shadow .18s ease, border-color .18s ease;
+        }
+        button:hover { filter:brightness(1.08); transform:translateY(-1px); }
+        button.dark {
+            background:rgba(255,255,255,.04);
+            border:1px solid var(--border);
+            color: var(--text);
+            box-shadow:none;
+        }
         button.green { background:linear-gradient(135deg,#059669,#10b981); }
         button.red { background:linear-gradient(135deg,#b91c1c,#ef4444); }
-        button.gold { background:linear-gradient(135deg,#92400e,#f59e0b); }
-        input { background:#0b1220; color:white; border:1px solid var(--border); min-width:260px; outline:none; }
+        button.gold { background:linear-gradient(135deg,#b45309,#f59e0b); }
+        button.tier-btn.active {
+            outline: 2px solid rgba(255,255,255,.18);
+            box-shadow: 0 0 0 3px var(--glow), 0 12px 28px rgba(0,0,0,.22);
+        }
+        input {
+            background:#091120;
+            color:white;
+            border:1px solid var(--border);
+            min-width:260px;
+            outline:none;
+        }
+        input:focus { border-color: var(--accent); box-shadow: 0 0 0 4px var(--glow); }
         .panel {
             background: var(--panel);
             border: 1px solid var(--border);
             border-radius: 24px;
             padding: 18px;
             margin-bottom: 18px;
-            box-shadow: 0 10px 40px rgba(0,0,0,.22);
+            box-shadow: 0 12px 36px rgba(0,0,0,.22), inset 0 1px 0 rgba(255,255,255,.02);
+            backdrop-filter: blur(16px);
         }
         .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap:14px; }
         .stats { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:14px; }
         .card, .stat {
-            background: linear-gradient(180deg, rgba(15,23,42,.95), rgba(15,23,42,.72));
-            border: 1px solid var(--border);
+            background: linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.02));
+            border: 1px solid rgba(255,255,255,.08);
             border-radius: 20px;
             padding: 16px;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.02);
         }
-        .label { color: var(--muted); font-size: 13px; margin-bottom:6px; }
-        .value { font-size: 22px; font-weight: 900; }
+        .stat {
+            position: relative;
+            overflow: hidden;
+        }
+        .stat::before {
+            content: "";
+            position: absolute;
+            inset: 0 auto 0 0;
+            width: 4px;
+            background: linear-gradient(180deg, var(--accent), var(--accent2));
+            opacity: .95;
+        }
+        .label { color: var(--muted); font-size: 13px; margin-bottom:6px; text-transform: uppercase; letter-spacing: .06em; }
+        .value { font-size: 22px; font-weight: 900; color: var(--soft); }
         .muted { color: var(--muted); }
         .pill {
             display:inline-block; border-radius:999px; padding:6px 10px; font-size:12px; font-weight:900; text-transform:uppercase;
@@ -825,41 +946,113 @@ def dashboard():
         .watch_sell { background:rgba(245,158,11,.17); color:#fde68a; border:1px solid rgba(245,158,11,.35); }
         .hold { background:rgba(148,163,184,.16); color:#e2e8f0; border:1px solid rgba(148,163,184,.25); }
         .rows { display:flex; flex-direction:column; gap:10px; }
-        .row { display:flex; justify-content:space-between; gap:10px; border-top:1px solid rgba(148,163,184,.12); padding-top:10px; }
+        .row { display:flex; justify-content:space-between; gap:10px; border-top:1px solid rgba(255,255,255,.08); padding-top:10px; }
         .actions { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
         .split { display:grid; grid-template-columns: 1.15fr .85fr; gap:18px; }
+        .section-head { display:flex; justify-content:space-between; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom:10px; }
+        .theme-strip {
+            display:flex;
+            flex-wrap:wrap;
+            gap:8px;
+        }
+        .theme-chip {
+            padding:8px 12px;
+            border-radius:999px;
+            font-weight:800;
+            font-size:12px;
+            border:1px solid rgba(255,255,255,.08);
+            background:rgba(255,255,255,.04);
+            color:var(--soft);
+        }
+        .theme-card {
+            position: relative;
+            overflow: hidden;
+            min-height: 180px;
+        }
+        .theme-card::after {
+            content: "";
+            position: absolute;
+            inset: auto -40px -50px auto;
+            width: 180px;
+            height: 180px;
+            border-radius: 50%;
+            background: radial-gradient(circle, var(--glow), transparent 66%);
+            filter: blur(8px);
+            pointer-events: none;
+        }
+        .tier-emblem {
+            width: 56px;
+            height: 56px;
+            border-radius: 18px;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            font-size: 30px;
+            background: linear-gradient(135deg, var(--accent), var(--accent2));
+            box-shadow: 0 12px 32px var(--glow);
+            margin-bottom: 12px;
+        }
+        .theme-line {
+            height: 8px;
+            border-radius: 999px;
+            background: linear-gradient(90deg, var(--accent), var(--accent2), var(--accent3));
+            margin: 12px 0 4px;
+        }
         canvas { max-height: 260px; }
-        .notice { border:1px solid rgba(245,158,11,.35); background:rgba(245,158,11,.12); border-radius:18px; padding:14px; color:#fde68a; }
-        @media (max-width: 920px) { .split { grid-template-columns:1fr; } }
+        .notice {
+            border:1px solid rgba(245,158,11,.35);
+            background:rgba(245,158,11,.12);
+            border-radius:18px;
+            padding:14px;
+            color:#fde68a;
+        }
+        .footer-note { color: var(--muted); font-size: 12px; }
+        @media (max-width: 920px) {
+            .split { grid-template-columns:1fr; }
+            .wrap { padding: 16px; }
+            .hero { padding: 20px; }
+            .tier-glance { grid-template-columns: 1fr; }
+        }
     </style>
 </head>
 <body>
 <div class="wrap">
-    <section class="hero">
+    <section class="hero" id="heroCard">
         <div class="topbar">
             <div>
-                <div class="badge">â AI Stock Agent Running</div>
+                <div class="hero-meta">
+                    <div class="badge">â AI Stock Agent Running</div>
+                    <div class="badge theme-badge" id="themeBadge">Starter Theme Active</div>
+                </div>
                 <h1>AI Stock Agent Dashboard</h1>
-                <p>Clean signals, tier access, crypto, internal paper trading, safety rules, reports, and premium charts.</p>
+                <p id="heroCopy">Clean signals, tier access, crypto, internal paper trading, safety rules, reports, and premium charts.</p>
+                <div class="tier-glance">
+                    <div class="mini-stat"><span class="k">Current Theme</span><span class="v" id="miniTier">Starter</span></div>
+                    <div class="mini-stat"><span class="k">Accent Style</span><span class="v" id="miniAccent">Neon Blue</span></div>
+                    <div class="mini-stat"><span class="k">Access Mode</span><span class="v" id="miniMode">Locked</span></div>
+                </div>
             </div>
-            <div class="card" style="min-width:320px;">
-                <h3>License Access</h3>
+            <div class="card theme-card" style="min-width:340px; max-width:430px; width:100%;">
+                <div class="tier-emblem" id="tierEmblem">â¦</div>
+                <h3 id="tierCardTitle">License Access</h3>
                 <p class="muted">Payment method required before trial unlock. Enter the license key received after checkout.</p>
                 <div class="actions">
                     <input id="licenseInput" placeholder="Enter license key">
                     <button onclick="saveKey()" class="green">Unlock</button>
                     <button onclick="clearKey()" class="dark">Clear</button>
                 </div>
+                <div class="theme-line"></div>
                 <p id="licenseStatus" class="muted"></p>
+                <p class="footer-note">Each tier now has its own visual theme so upgrades feel premium.</p>
             </div>
         </div>
 
         <div class="tabs">
-            <button onclick="loadTier('starter')">Starter</button>
-            <button onclick="loadTier('pro')">Pro</button>
-            <button onclick="loadTier('elite')">Elite</button>
-            <button onclick="loadTier('ultra')">Ultra</button>
-            <button onclick="loadTier('mastery_plus')" class="gold">Mastery Plus</button>
+            <button id="btn-starter" class="tier-btn" onclick="loadTier('starter')">Starter</button>
+            <button id="btn-pro" class="tier-btn" onclick="loadTier('pro')">Pro</button>
+            <button id="btn-elite" class="tier-btn" onclick="loadTier('elite')">Elite</button>
+            <button id="btn-ultra" class="tier-btn" onclick="loadTier('ultra')">Ultra</button>
+            <button id="btn-mastery_plus" class="tier-btn gold" onclick="loadTier('mastery_plus')">Mastery Plus</button>
             <button onclick="loadTiers()" class="dark">All Tiers</button>
             <button onclick="loadReport()" class="dark">Daily Report</button>
             <button onclick="loadStatus()" class="dark">Status</button>
@@ -879,23 +1072,46 @@ def dashboard():
 
     <section class="split">
         <div class="panel">
-            <h2>Stock Signals</h2>
+            <div class="section-head">
+                <h2>Stock Signals</h2>
+                <div class="theme-strip">
+                    <span class="theme-chip">Theme-aware cards</span>
+                    <span class="theme-chip">Premium tier styling</span>
+                </div>
+            </div>
             <div class="grid" id="stocks"></div>
         </div>
         <div class="panel">
-            <h2>Crypto Signals</h2>
+            <div class="section-head">
+                <h2>Crypto Signals</h2>
+                <div class="theme-strip">
+                    <span class="theme-chip">Crypto heat</span>
+                    <span class="theme-chip">Matching accents</span>
+                </div>
+            </div>
             <div class="grid" id="crypto"></div>
         </div>
     </section>
 
     <section class="panel">
-        <h2>Top Tier Bot Positions / Charts</h2>
-        <p class="muted">Ultra and Mastery Plus show bot positions or buy-signal previews.</p>
+        <div class="section-head">
+            <div>
+                <h2>Top Tier Bot Positions / Charts</h2>
+                <p class="muted">Ultra and Mastery Plus show bot positions or buy-signal previews.</p>
+            </div>
+            <div class="theme-strip">
+                <span class="theme-chip">Chart panels</span>
+                <span class="theme-chip">Upgrade ambiance</span>
+            </div>
+        </div>
         <div class="grid" id="portfolio"></div>
     </section>
 
     <section class="panel">
-        <h2>Details</h2>
+        <div class="section-head">
+            <h2>Details</h2>
+            <div class="theme-strip" id="detailChips"></div>
+        </div>
         <div id="details"></div>
     </section>
 </div>
@@ -904,6 +1120,104 @@ def dashboard():
 let currentTier = localStorage.getItem("tier") || "starter";
 let licenseKey = localStorage.getItem("licenseKey") || "";
 let charts = {};
+
+const TIER_THEMES = {
+    starter: {
+        label: "Starter Theme",
+        accentName: "Neon Blue",
+        emblem: "â¡",
+        access: "Starter / Trial",
+        heroCopy: "Start clean with a sharp blue launchpad theme built for previews and first-time users.",
+        chips: ["Starter vibe", "Blue launch", "Preview access"],
+        css: {
+            "--bg": "#06101f",
+            "--bg2": "#0a1222",
+            "--accent": "#3b82f6",
+            "--accent2": "#06b6d4",
+            "--accent3": "#60a5fa",
+            "--glow": "rgba(59,130,246,.28)",
+            "--heroA": "rgba(59,130,246,.24)",
+            "--heroB": "rgba(6,182,212,.18)",
+            "--heroC": "rgba(96,165,250,.12)"
+        }
+    },
+    pro: {
+        label: "Pro Theme",
+        accentName: "Purple Velocity",
+        emblem: "â",
+        access: "Pro Access",
+        heroCopy: "Pro unlocks a slick purple velocity style for a smarter, sharper trading experience.",
+        chips: ["Pro style", "Purple velocity", "Faster feel"],
+        css: {
+            "--bg": "#0c0818",
+            "--bg2": "#140d24",
+            "--accent": "#8b5cf6",
+            "--accent2": "#6366f1",
+            "--accent3": "#c084fc",
+            "--glow": "rgba(139,92,246,.28)",
+            "--heroA": "rgba(139,92,246,.26)",
+            "--heroB": "rgba(99,102,241,.18)",
+            "--heroC": "rgba(192,132,252,.12)"
+        }
+    },
+    elite: {
+        label: "Elite Theme",
+        accentName: "Emerald Prestige",
+        emblem: "â¬¢",
+        access: "Elite Access",
+        heroCopy: "Elite gets an emerald prestige skin that feels more exclusive and polished.",
+        chips: ["Elite prestige", "Emerald glow", "Premium engine"],
+        css: {
+            "--bg": "#07150f",
+            "--bg2": "#0a1a14",
+            "--accent": "#10b981",
+            "--accent2": "#14b8a6",
+            "--accent3": "#6ee7b7",
+            "--glow": "rgba(16,185,129,.28)",
+            "--heroA": "rgba(16,185,129,.24)",
+            "--heroB": "rgba(20,184,166,.18)",
+            "--heroC": "rgba(110,231,183,.12)"
+        }
+    },
+    ultra: {
+        label: "Ultra Theme",
+        accentName: "Crimson Heat",
+        emblem: "â¬£",
+        access: "Ultra Access",
+        heroCopy: "Ultra turns the dashboard into a more aggressive crimson heat theme for power users.",
+        chips: ["Ultra fire", "Automation ready", "Chart heavy"],
+        css: {
+            "--bg": "#180809",
+            "--bg2": "#1d0b11",
+            "--accent": "#ef4444",
+            "--accent2": "#f97316",
+            "--accent3": "#fb7185",
+            "--glow": "rgba(239,68,68,.28)",
+            "--heroA": "rgba(239,68,68,.24)",
+            "--heroB": "rgba(249,115,22,.18)",
+            "--heroC": "rgba(251,113,133,.12)"
+        }
+    },
+    mastery_plus: {
+        label: "Mastery Plus Theme",
+        accentName: "Black Gold Luxury",
+        emblem: "ð",
+        access: "Mastery Plus",
+        heroCopy: "Mastery Plus unlocks a black-and-gold luxury theme so the highest upgrade feels truly premium.",
+        chips: ["Luxury mode", "Global scanner", "Top tier aura"],
+        css: {
+            "--bg": "#0d0a05",
+            "--bg2": "#141006",
+            "--accent": "#f59e0b",
+            "--accent2": "#facc15",
+            "--accent3": "#fbbf24",
+            "--glow": "rgba(245,158,11,.30)",
+            "--heroA": "rgba(245,158,11,.24)",
+            "--heroB": "rgba(250,204,21,.16)",
+            "--heroC": "rgba(251,191,36,.10)"
+        }
+    }
+};
 
 document.getElementById("licenseInput").value = licenseKey;
 
@@ -917,6 +1231,29 @@ function badgeClass(signal) {
     if (signal === "watch_buy") return "pill watch_buy";
     if (signal === "watch_sell") return "pill watch_sell";
     return "pill hold";
+}
+
+function applyTheme(tier) {
+    const theme = TIER_THEMES[tier] || TIER_THEMES.starter;
+    const root = document.documentElement;
+    Object.entries(theme.css).forEach(([k, v]) => root.style.setProperty(k, v));
+
+    document.getElementById("themeBadge").innerText = theme.label + " Active";
+    document.getElementById("miniTier").innerText = theme.label.replace(" Theme", "");
+    document.getElementById("miniAccent").innerText = theme.accentName;
+    document.getElementById("miniMode").innerText = licenseKey ? "Unlocked" : "Locked";
+    document.getElementById("tierEmblem").innerText = theme.emblem;
+    document.getElementById("tierCardTitle").innerText = theme.access;
+    document.getElementById("heroCopy").innerText = theme.heroCopy;
+    document.getElementById("detailChips").innerHTML = theme.chips.map(chip => `<span class="theme-chip">${chip}</span>`).join("");
+
+    document.querySelectorAll('.tier-btn').forEach(btn => btn.classList.remove('active'));
+    const activeBtn = document.getElementById('btn-' + tier);
+    if (activeBtn) activeBtn.classList.add('active');
+}
+
+function accessText(valid, name) {
+    return valid ? `Unlocked: ${name}` : "Locked â payment/license required.";
 }
 
 async function getJSON(url) {
@@ -939,7 +1276,8 @@ function clearKey() {
     licenseKey = "";
     localStorage.removeItem("licenseKey");
     document.getElementById("licenseInput").value = "";
-    document.getElementById("licenseStatus").innerText = "Starter access only.";
+    document.getElementById("licenseStatus").innerText = "Locked â payment/license required.";
+    applyTheme("starter");
     loadTier("starter");
 }
 
@@ -947,9 +1285,11 @@ async function checkLicense() {
     try {
         const res = await fetch("/license?key=" + encodeURIComponent(licenseKey));
         const data = await res.json();
-        document.getElementById("licenseStatus").innerText = data.valid ? "Unlocked: " + data.name : "Starter access only.";
+        document.getElementById("licenseStatus").innerText = accessText(data.valid, data.name || data.tier || "tier");
+        document.getElementById("miniMode").innerText = data.valid ? "Unlocked" : "Locked";
     } catch {
-        document.getElementById("licenseStatus").innerText = "Starter access only.";
+        document.getElementById("licenseStatus").innerText = "Locked â payment/license required.";
+        document.getElementById("miniMode").innerText = "Locked";
     }
 }
 
@@ -966,6 +1306,7 @@ function lockedHTML(err) {
 async function loadTier(tier) {
     currentTier = tier;
     localStorage.setItem("tier", tier);
+    applyTheme(tier);
 
     document.getElementById("title").innerText = "Loading " + tier + "...";
     document.getElementById("subtitle").innerText = "";
@@ -984,6 +1325,7 @@ async function loadTier(tier) {
         report = await getJSON("/report?tier=" + tier);
     } catch (err) {
         document.getElementById("title").innerText = "Access Locked";
+        document.getElementById("subtitle").innerText = "Complete checkout, then enter your license key to unlock this theme.";
         document.getElementById("details").innerHTML = lockedHTML(err);
         return;
     }
@@ -1113,14 +1455,17 @@ async function loadTiers() {
     const tiers = await getJSON("/tiers");
     document.getElementById("details").innerHTML = `<div class="grid">` + Object.keys(tiers).map(k => {
         const t = tiers[k];
+        const theme = TIER_THEMES[k] || TIER_THEMES.starter;
         return `
-            <div class="card">
+            <div class="card theme-card">
+                <div class="tier-emblem">${theme.emblem}</div>
                 <h3>${t.name}</h3>
                 <p><b>Price:</b> ${t.price}</p>
                 <p><b>Trial:</b> ${t.trial}</p>
                 <p><b>Discount:</b> ${t.welcome_discount}</p>
                 <p><b>Stocks:</b> ${t.symbols.length}</p>
                 <p><b>Crypto:</b> ${t.crypto_symbols.length}</p>
+                <p><b>Theme:</b> ${theme.accentName}</p>
                 <p>${t.upgrade_message}</p>
             </div>
         `;
@@ -1205,6 +1550,7 @@ async function drawChart(id, symbol) {
     });
 }
 
+applyTheme(currentTier);
 checkLicense();
 loadTier(currentTier);
 </script>
