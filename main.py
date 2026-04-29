@@ -1,613 +1,1047 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, render_template_string
 import os
+from datetime import datetime, timezone
 import pandas as pd
-import alpaca_trade_api as tradeapi
+import numpy as np
+import yfinance as yf
+
+try:
+    import alpaca_trade_api as tradeapi
+except Exception:
+    tradeapi = None
 
 app = Flask(__name__)
 
-API_KEY = os.getenv("ALPACA_API_KEY")
-SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
-BASE_URL = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
-AUTO_TRADE = os.getenv("AUTO_TRADE", "false").lower() == "true"
-TIMEFRAME = "1Min"
+API_KEY = os.getenv("ALPACA_API_KEY", "")
+SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "")
+PAPER_URL = os.getenv("ALPACA_PAPER_URL", "https://paper-api.alpaca.markets")
+LIVE_URL = os.getenv("ALPACA_LIVE_URL", "https://api.alpaca.markets")
 
-api = tradeapi.REST(API_KEY, SECRET_KEY, BASE_URL) if API_KEY and SECRET_KEY else None
+ORDERS = []
 
-TIERS = {
+TIER_ORDER = ["starter", "pro", "elite", "ultra", "mastery_plus"]
+NICE_NAMES = {
+    "starter": "Starter",
+    "pro": "Pro",
+    "elite": "Elite",
+    "ultra": "Ultra",
+    "mastery_plus": "Mastery Plus"
+}
+
+TIER_CONFIGS = {
     "starter": {
         "price": "$0/month",
         "symbols": ["AAPL", "TSLA"],
+        "crypto_symbols": ["BTC-USD"],
         "min_score_buy": 85,
         "max_score_sell": 15,
         "auto_trade": False,
         "paper_trading": False,
-        "delay_minutes": 30,
+        "live_trading_allowed": False,
         "email_only": True,
-        "dashboard_access": "limited",
+        "delay_minutes": 30,
         "features": [
-            "free limited access",
-            "2 stocks only",
-            "delayed signals",
-            "email alerts only",
-            "no auto trading",
-            "upgrade required for live dashboard"
+            "free trustworthy preview",
+            "2 stocks",
+            "1 crypto preview",
+            "confidence score included",
+            "signal reasons included",
+            "delayed alerts",
+            "email style experience",
+            "no auto trading"
         ],
-        "upgrade_message": "Upgrade to Pro for live signals, more stocks, and advanced scoring."
+        "upgrade_message": "Upgrade to Pro for live dashboard access, more symbols, paper trading preview, and stronger scoring."
     },
     "pro": {
         "price": "$9.99/month",
         "symbols": ["AAPL", "TSLA", "NVDA", "MSFT", "AMZN"],
+        "crypto_symbols": ["BTC-USD"],
         "min_score_buy": 75,
         "max_score_sell": 25,
         "auto_trade": False,
         "paper_trading": True,
-        "delay_minutes": 0,
+        "live_trading_allowed": False,
         "email_only": False,
-        "dashboard_access": "full",
+        "delay_minutes": 0,
         "features": [
-            "live signals",
+            "live dashboard",
             "5 stocks",
+            "1 crypto preview",
             "RSI",
             "MACD",
             "volume filter",
-            "paper trading preview"
+            "paper trading preview",
+            "daily report"
         ],
-        "upgrade_message": "Upgrade to Elite for more stocks and stronger confidence filtering."
+        "upgrade_message": "Upgrade to Elite for more symbols, stronger confidence filtering, and better product depth."
     },
     "elite": {
         "price": "$29.99/month",
         "symbols": ["AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "META", "GOOGL", "AMD"],
+        "crypto_symbols": ["BTC-USD", "ETH-USD", "SOL-USD"],
         "min_score_buy": 70,
         "max_score_sell": 30,
         "auto_trade": False,
         "paper_trading": True,
-        "delay_minutes": 0,
+        "live_trading_allowed": False,
         "email_only": False,
-        "dashboard_access": "full",
+        "delay_minutes": 0,
         "features": [
             "8 stocks",
+            "3 crypto symbols",
             "stronger scoring",
-            "confidence engine",
             "better filters",
-            "paper trading simulator"
+            "confidence engine",
+            "paper trading simulator",
+            "daily report",
+            "clean dashboard"
         ],
-        "upgrade_message": "Upgrade to Ultra for automation access."
+        "upgrade_message": "Upgrade to Ultra for automation access and live chart monitoring."
     },
     "ultra": {
         "price": "$59.99/month",
         "symbols": ["AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "META", "GOOGL", "AMD", "PLTR", "NFLX"],
+        "crypto_symbols": ["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD", "DOGE-USD"],
         "min_score_buy": 68,
         "max_score_sell": 32,
         "auto_trade": True,
         "paper_trading": True,
-        "delay_minutes": 0,
+        "live_trading_allowed": False,
         "email_only": False,
-        "dashboard_access": "full",
+        "delay_minutes": 0,
         "features": [
             "10 stocks",
+            "5 crypto symbols",
             "paper auto-trading",
+            "live portfolio charts",
             "automation access",
             "daily report",
             "advanced scoring"
         ],
-        "upgrade_message": "Upgrade to Mastery Plus for the largest symbol list, crypto, and premium engine."
+        "upgrade_message": "Upgrade to Mastery Plus for live trading access, larger watchlists, and premium engine."
     },
     "mastery_plus": {
         "price": "$499/month",
         "symbols": ["AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "META", "GOOGL", "AMD", "PLTR", "NFLX", "AVGO", "SMCI", "COIN", "MSTR"],
+        "crypto_symbols": ["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD", "DOGE-USD", "ADA-USD"],
         "min_score_buy": 65,
         "max_score_sell": 35,
         "auto_trade": True,
         "paper_trading": True,
-        "delay_minutes": 0,
+        "live_trading_allowed": True,
         "email_only": False,
-        "dashboard_access": "full",
+        "delay_minutes": 0,
         "features": [
-            "top tier",
-            "14 stock watchlist",
-            "crypto watchlist",
-            "paper trading autopilot",
-            "done-for-you mode",
+            "14 stocks",
+            "6 crypto symbols",
+            "paper autopilot",
+            "live trading access",
+            "live portfolio charts",
             "daily report",
-            "premium signal engine"
+            "premium signal engine",
+            "top tier product"
         ],
         "upgrade_message": "You are on the highest tier."
     }
 }
 
-CRYPTO_SYMBOLS = ["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD"]
 
-LICENSE_KEYS = {
-    "STARTER-DEMO": "starter",
-    "PRO-DEMO": "pro",
-    "ELITE-DEMO": "elite",
-    "ULTRA-DEMO": "ultra",
-    "MASTER-DEMO": "mastery_plus"
-}
+def get_config(tier):
+    return TIER_CONFIGS.get(tier, TIER_CONFIGS["starter"])
 
-def get_data(symbol):
-    if api and "-" not in symbol:
-        try:
-            bars = api.get_bars(
-                symbol,
-                TIMEFRAME,
-                limit=100,
-                feed="iex"
-            ).df
 
-            if bars is not None and not bars.empty:
-                return bars[["open", "high", "low", "close", "volume"]]
+def get_watchlist(tier):
+    cfg = get_config(tier)
+    return cfg["symbols"] + cfg["crypto_symbols"]
 
-        except Exception as e:
-            print(f"ALPACA DATA ERROR FOR {symbol}: {e}")
 
+def get_alpaca_client(mode="paper"):
+    if not tradeapi or not API_KEY or not SECRET_KEY:
+        return None
+    base_url = LIVE_URL if mode == "live" else PAPER_URL
     try:
-        import yfinance as yf
+        return tradeapi.REST(API_KEY, SECRET_KEY, base_url, api_version="v2")
+    except Exception:
+        return None
 
-        yf_df = yf.download(
-            symbol,
-            period="5d",
-            interval="1m",
-            progress=False,
-            auto_adjust=False
-        )
 
-        if yf_df is None or yf_df.empty:
+def get_data(symbol, period="5d", interval="5m"):
+    try:
+        df = yf.Ticker(symbol).history(period=period, interval=interval, auto_adjust=True, prepost=False)
+        if df is None or df.empty:
             return pd.DataFrame()
-
-        if isinstance(yf_df.columns, pd.MultiIndex):
-            yf_df.columns = [col[0] for col in yf_df.columns]
-
-        yf_df = yf_df.rename(columns={
-            "Open": "open",
-            "High": "high",
-            "Low": "low",
-            "Close": "close",
-            "Volume": "volume"
-        })
-
-        needed = ["open", "high", "low", "close", "volume"]
-
-        for col in needed:
-            if col not in yf_df.columns:
-                return pd.DataFrame()
-
-        return yf_df[needed].dropna()
-
-    except Exception as e:
-        print(f"YFINANCE ERROR FOR {symbol}: {e}")
+        df = df.rename(columns=str.lower)
+        df = df.dropna()
+        return df
+    except Exception:
         return pd.DataFrame()
 
-def calculate_indicators(df):
-    df = df.copy()
 
-    df["ma_fast"] = df["close"].rolling(5).mean()
-    df["ma_slow"] = df["close"].rolling(20).mean()
+def compute_rsi(close, period=14):
+    delta = close.diff()
+    gain = delta.clip(lower=0).rolling(period).mean()
+    loss = (-delta.clip(upper=0)).rolling(period).mean()
+    loss = loss.replace(0, np.nan)
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi.fillna(50)
 
-    delta = df["close"].diff()
-    gain = delta.where(delta > 0, 0).rolling(14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-    rs = gain / (loss + 0.000001)
-    df["rsi"] = 100 - (100 / (1 + rs))
 
-    ema12 = df["close"].ewm(span=12, adjust=False).mean()
-    ema26 = df["close"].ewm(span=26, adjust=False).mean()
+def analyze_symbol(symbol):
+    df = get_data(symbol)
 
-    df["macd"] = ema12 - ema26
-    df["macd_signal"] = df["macd"].ewm(span=9, adjust=False).mean()
-    df["avg_volume"] = df["volume"].rolling(20).mean()
+    if df.empty or len(df) < 60:
+        return {
+            "symbol": symbol,
+            "signal": "hold",
+            "score": 0,
+            "confidence": "none",
+            "last_price": 0,
+            "reasons": ["no_data_from_yfinance"],
+            "bars_received": 0,
+            "order_status": "not_executed"
+        }
 
-    return df.dropna()
+    close = df["close"]
+    volume = df["volume"].fillna(0)
 
-def score_symbol(df, tier_config):
-    latest = df.iloc[-1]
+    ma20 = close.rolling(20).mean()
+    ma50 = close.rolling(50).mean()
+
+    ema12 = close.ewm(span=12, adjust=False).mean()
+    ema26 = close.ewm(span=26, adjust=False).mean()
+    macd = ema12 - ema26
+    macd_signal = macd.ewm(span=9, adjust=False).mean()
+
+    rsi = compute_rsi(close)
+
+    last_price = float(close.iloc[-1])
+    last_ma20 = float(ma20.iloc[-1])
+    last_ma50 = float(ma50.iloc[-1])
+    last_macd = float(macd.iloc[-1])
+    last_macd_signal = float(macd_signal.iloc[-1])
+    last_rsi = float(rsi.iloc[-1])
+
+    avg_volume = float(volume.tail(20).mean()) if len(volume) >= 20 else float(volume.mean())
+    last_volume = float(volume.iloc[-1])
+
+    volatility = float(close.pct_change().dropna().tail(20).std()) if len(close) >= 20 else 0.0
+
     score = 50
     reasons = []
 
-    if latest["ma_fast"] > latest["ma_slow"]:
+    if last_price > last_ma20 > last_ma50:
         score += 20
         reasons.append("bullish_trend")
     else:
         score -= 20
         reasons.append("bearish_trend")
 
-    if latest["rsi"] < 30:
-        score += 20
+    if last_rsi < 35:
+        score += 10
         reasons.append("oversold_rsi")
-    elif latest["rsi"] > 70:
-        score -= 20
+    elif last_rsi > 70:
+        score -= 10
         reasons.append("overbought_rsi")
     else:
         reasons.append("neutral_rsi")
 
-    if latest["macd"] > latest["macd_signal"]:
-        score += 20
+    if last_macd > last_macd_signal:
+        score += 15
         reasons.append("bullish_macd")
     else:
-        score -= 20
+        score -= 15
         reasons.append("bearish_macd")
 
-    if latest["volume"] > latest["avg_volume"]:
+    if avg_volume > 0 and last_volume >= avg_volume * 0.9:
         score += 10
         reasons.append("volume_confirmed")
     else:
-        score -= 5
-        reasons.append("weak_volume")
+        reasons.append("low_volume")
 
-    volatility = (df["close"].max() - df["close"].min()) / df["close"].mean()
-
-    if volatility > 0.08:
+    if volatility > 0.03:
         score -= 30
         reasons.append("high_volatility_risk")
-    elif volatility < 0.04:
-        score += 10
+    else:
         reasons.append("stable_volatility")
 
     score = max(0, min(100, int(score)))
 
-    if score >= tier_config["min_score_buy"]:
-        signal = "buy"
+    if score >= 80 or score <= 20:
         confidence = "high"
-    elif score <= tier_config["max_score_sell"]:
-        signal = "sell"
-        confidence = "high"
-    elif score >= 60:
-        signal = "watch_buy"
-        confidence = "medium"
-    elif score <= 40:
-        signal = "watch_sell"
+    elif score >= 60 or score <= 40:
         confidence = "medium"
     else:
-        signal = "hold"
         confidence = "low"
 
-    return score, signal, confidence, reasons
+    return {
+        "symbol": symbol,
+        "signal": "hold",
+        "score": score,
+        "confidence": confidence,
+        "last_price": round(last_price, 2),
+        "reasons": reasons,
+        "bars_received": int(len(df)),
+        "order_status": "not_executed"
+    }
 
-def generate_signal(symbol, tier_config):
-    try:
-        df = get_data(symbol)
 
-        if df.empty:
-            return {
-                "symbol": symbol,
-                "signal": "hold",
-                "score": 0,
-                "confidence": "none",
-                "reason": "no_data_available",
-                "order_status": "not_executed"
-            }
+def signal_for_score(score, cfg):
+    if score >= cfg["min_score_buy"]:
+        return "buy"
+    if score >= max(60, cfg["min_score_buy"] - 10):
+        return "watch_buy"
+    if score <= cfg["max_score_sell"]:
+        return "sell"
+    if score <= cfg["max_score_sell"] + 10:
+        return "watch_sell"
+    return "hold"
 
-        if len(df) < 30:
-            return {
-                "symbol": symbol,
-                "signal": "hold",
-                "score": 0,
-                "confidence": "none",
-                "bars_received": len(df),
-                "reason": "not_enough_market_data",
-                "order_status": "not_executed"
-            }
 
-        df = calculate_indicators(df)
+def get_signals_for_tier(tier):
+    cfg = get_config(tier)
+    watchlist = get_watchlist(tier)
+    signals = []
 
-        if df.empty or len(df) < 5:
-            return {
-                "symbol": symbol,
-                "signal": "hold",
-                "score": 0,
-                "confidence": "none",
-                "reason": "not_enough_indicator_data",
-                "order_status": "not_executed"
-            }
-
-        score, signal, confidence, reasons = score_symbol(df, tier_config)
-
-        return {
-            "symbol": symbol,
-            "signal": signal,
-            "score": score,
-            "confidence": confidence,
-            "reasons": reasons,
-            "last_price": round(float(df["close"].iloc[-1]), 2),
-            "bars_received": len(df),
-            "order_status": "not_executed"
-        }
-
-    except Exception as e:
-        return {
-            "symbol": symbol,
-            "signal": "hold",
-            "score": 0,
-            "confidence": "error",
-            "reason": str(e),
-            "order_status": "not_executed"
-        }
-
-def get_account_report():
-    if not api:
-        return {
-            "status": "error",
-            "reason": "alpaca_api_not_loaded"
-        }
-
-    try:
-        account = api.get_account()
-        positions = api.list_positions()
-
-        open_positions = []
-        total_unrealized_pl = 0.0
-        total_intraday_pl = 0.0
-
-        for p in positions:
-            unrealized_pl = float(p.unrealized_pl)
-            intraday_pl = float(getattr(p, "unrealized_intraday_pl", 0) or 0)
-
-            total_unrealized_pl += unrealized_pl
-            total_intraday_pl += intraday_pl
-
-            open_positions.append({
-                "symbol": p.symbol,
-                "qty": p.qty,
-                "market_value": p.market_value,
-                "avg_entry_price": p.avg_entry_price,
-                "current_price": p.current_price,
-                "unrealized_pl": p.unrealized_pl,
-                "unrealized_intraday_pl": getattr(p, "unrealized_intraday_pl", "0")
-            })
-
-        return {
-            "status": "ok",
-            "account_status": account.status,
-            "cash": account.cash,
-            "buying_power": account.buying_power,
-            "portfolio_value": account.portfolio_value,
-            "equity": account.equity,
-            "total_unrealized_pl": round(total_unrealized_pl, 2),
-            "today_unrealized_pl": round(total_intraday_pl, 2),
-            "positions": open_positions
-        }
-
-    except Exception as e:
-        return {
-            "status": "error",
-            "reason": str(e)
-        }
-
-def run_bot(tier_name, execute=False, crypto=False):
-    tier_config = TIERS.get(tier_name, TIERS["starter"])
-    symbols = CRYPTO_SYMBOLS if crypto else tier_config["symbols"]
-    results = []
-
-    for symbol in symbols:
-        data = generate_signal(symbol, tier_config)
-        order_status = "not_executed"
-
-        if execute and AUTO_TRADE and tier_config["auto_trade"] and api and "-" not in symbol:
-            try:
-                if data["signal"] == "buy":
-                    api.submit_order(
-                        symbol=symbol,
-                        qty=1,
-                        side="buy",
-                        type="market",
-                        time_in_force="gtc"
-                    )
-                    order_status = "paper_buy_order_sent"
-
-                elif data["signal"] == "sell":
-                    api.submit_order(
-                        symbol=symbol,
-                        qty=1,
-                        side="sell",
-                        type="market",
-                        time_in_force="gtc"
-                    )
-                    order_status = "paper_sell_order_sent"
-
-            except Exception as e:
-                order_status = f"order_error: {str(e)}"
-
-        data["order_status"] = order_status
-        results.append(data)
+    for symbol in watchlist:
+        result = analyze_symbol(symbol)
+        result["signal"] = signal_for_score(result["score"], cfg)
+        result["delay_minutes"] = cfg["delay_minutes"]
+        signals.append(result)
 
     return {
-        "tier": tier_name,
-        "price": tier_config["price"],
-        "auto_trade": AUTO_TRADE and tier_config["auto_trade"],
-        "paper_trading": tier_config.get("paper_trading", False),
-        "crypto_mode": crypto,
-        "delay_minutes": tier_config.get("delay_minutes", 0),
-        "email_only": tier_config.get("email_only", False),
-        "dashboard_access": tier_config.get("dashboard_access", "full"),
-        "upgrade_message": tier_config.get("upgrade_message", ""),
+        "tier": tier,
+        "auto_trade": cfg["auto_trade"],
+        "paper_trading": cfg["paper_trading"],
+        "live_trading_allowed": cfg["live_trading_allowed"],
+        "signals": signals
+    }
+
+
+def place_live_order(symbol, side, qty=1):
+    client = get_alpaca_client("live")
+    if client is None:
+        return "live_api_unavailable"
+
+    try:
+        order_symbol = symbol.replace("-USD", "USD")
+        client.submit_order(
+            symbol=order_symbol,
+            qty=qty,
+            side=side,
+            type="market",
+            time_in_force="gtc"
+        )
+        return f"live_{side}_submitted"
+    except Exception as e:
+        return f"live_error_{str(e)[:80]}"
+
+
+def execute_trade_cycle(tier, mode="paper"):
+    cfg = get_config(tier)
+    signals_data = get_signals_for_tier(tier)
+    results = []
+
+    for item in signals_data["signals"]:
+        item = dict(item)
+        trade_side = None
+
+        if item["signal"] == "buy":
+            trade_side = "buy"
+        elif item["signal"] == "sell":
+            trade_side = "sell"
+
+        if trade_side is None:
+            item["order_status"] = "not_executed"
+            results.append(item)
+            continue
+
+        if mode == "paper":
+            if not cfg["paper_trading"]:
+                item["order_status"] = "paper_trading_not_allowed"
+            else:
+                item["order_status"] = f"paper_{trade_side}"
+                ORDERS.append({
+                    "symbol": item["symbol"],
+                    "side": trade_side,
+                    "entry_price": item["last_price"],
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "mode": "paper",
+                    "tier": tier
+                })
+
+        elif mode == "live":
+            if not cfg["live_trading_allowed"]:
+                item["order_status"] = "live_trading_not_allowed"
+            elif item["symbol"].endswith("-USD"):
+                item["order_status"] = "live_crypto_blocked_demo"
+            else:
+                status = place_live_order(item["symbol"], trade_side, qty=1)
+                item["order_status"] = status
+                if status.startswith("live_") and status.endswith("_submitted"):
+                    ORDERS.append({
+                        "symbol": item["symbol"],
+                        "side": trade_side,
+                        "entry_price": item["last_price"],
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "mode": "live",
+                        "tier": tier
+                    })
+        else:
+            item["order_status"] = "invalid_mode"
+
+        results.append(item)
+
+    return {
+        "tier": tier,
+        "mode": mode,
+        "auto_trade": cfg["auto_trade"],
         "signals": results
     }
 
-@app.route("/")
-@app.route("/dashboard")
-def dashboard():
-    return '''
-<!DOCTYPE html>
-<html>
-<head>
-    <title>AI Stock Agent</title>
-    <style>
-        body { background: #0f172a; color: white; font-family: Arial, sans-serif; padding: 30px; }
-        h1 { color: #38bdf8; }
-        h2 { color: #e0f2fe; }
-        button {
-            padding: 10px 15px;
-            margin: 5px;
-            border: none;
-            border-radius: 8px;
-            background: #38bdf8;
-            color: black;
-            font-weight: bold;
-            cursor: pointer;
-        }
-        .card { background: #1e293b; padding: 20px; margin: 15px 0; border-radius: 12px; }
-        .buy { color: #22c55e; font-weight: bold; }
-        .sell { color: #ef4444; font-weight: bold; }
-        .hold, .watch_buy, .watch_sell { color: #facc15; font-weight: bold; }
-        .score { font-size: 22px; font-weight: bold; }
-        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 15px; }
-    </style>
-</head>
-<body>
-    <h1>AI Stock Agent Dashboard</h1>
-    <p>Status: Running</p>
 
-    <button onclick="loadSignals('starter')">Starter</button>
-    <button onclick="loadSignals('pro')">Pro</button>
-    <button onclick="loadSignals('elite')">Elite</button>
-    <button onclick="loadSignals('ultra')">Ultra</button>
-    <button onclick="loadSignals('mastery_plus')">Mastery Plus</button>
-    <button onclick="loadCrypto()">Crypto</button>
-    <button onclick="loadReport()">Daily Report</button>
-    <button onclick="loadTiers()">Tiers</button>
+def latest_price(symbol):
+    df = get_data(symbol, period="1d", interval="5m")
+    if df.empty:
+        return 0
+    return round(float(df["close"].iloc[-1]), 2)
 
-    <div id="content"></div>
 
-    <script>
-        async function loadSignals(tier) {
-            document.getElementById("content").innerHTML = "<p>Loading signals...</p>";
-            const res = await fetch("/signals?tier=" + tier);
-            const data = await res.json();
-            renderSignals(data);
-        }
+def get_open_positions(tier):
+    positions = {}
 
-        async function loadCrypto() {
-            document.getElementById("content").innerHTML = "<p>Loading crypto...</p>";
-            const res = await fetch("/crypto?tier=mastery_plus");
-            const data = await res.json();
-            renderSignals(data);
-        }
+    for order in ORDERS:
+        if order["tier"] != tier:
+            continue
 
-        async function loadReport() {
-            document.getElementById("content").innerHTML = "<p>Loading report...</p>";
-            const res = await fetch("/report");
-            const data = await res.json();
+        symbol = order["symbol"]
+        if order["side"] == "buy":
+            positions[symbol] = order
+        elif order["side"] == "sell" and symbol in positions:
+            del positions[symbol]
 
-            let html = "<h2>Daily Account Report</h2>";
-            html += "<div class='card'>";
-            html += "<p>Status: " + data.status + "</p>";
-            html += "<p>Account Status: " + (data.account_status || "N/A") + "</p>";
-            html += "<p>Cash: $" + (data.cash || "N/A") + "</p>";
-            html += "<p>Buying Power: $" + (data.buying_power || "N/A") + "</p>";
-            html += "<p>Portfolio Value: $" + (data.portfolio_value || "N/A") + "</p>";
-            html += "<p>Equity: $" + (data.equity || "N/A") + "</p>";
-            html += "<p>Total Unrealized P/L: $" + (data.total_unrealized_pl || 0) + "</p>";
-            html += "<p>Today Unrealized P/L: $" + (data.today_unrealized_pl || 0) + "</p>";
-            html += "</div>";
+    items = []
+    for symbol, order in positions.items():
+        current = latest_price(symbol)
+        entry = float(order["entry_price"])
+        pnl_pct = round(((current - entry) / entry) * 100, 2) if entry else 0
 
-            document.getElementById("content").innerHTML = html;
-        }
+        items.append({
+            "symbol": symbol,
+            "entry_price": round(entry, 2),
+            "current_price": current,
+            "pnl_pct": pnl_pct,
+            "mode": order["mode"],
+            "timestamp": order["timestamp"]
+        })
 
-        async function loadTiers() {
-            document.getElementById("content").innerHTML = "<p>Loading tiers...</p>";
-            const res = await fetch("/tiers");
-            const data = await res.json();
+    if not items:
+        signals = get_signals_for_tier(tier)["signals"]
+        for s in signals:
+            if s["signal"] == "buy":
+                items.append({
+                    "symbol": s["symbol"],
+                    "entry_price": s["last_price"],
+                    "current_price": s["last_price"],
+                    "pnl_pct": 0,
+                    "mode": "signal_preview",
+                    "timestamp": ""
+                })
 
-            let html = "<h2>Subscription Tiers</h2><div class='grid'>";
+    return items[:8]
 
-            Object.keys(data).forEach(tier => {
-                html += "<div class='card'>";
-                html += "<h2>" + tier + "</h2>";
-                html += "<p>Price: " + data[tier].price + "</p>";
-                html += "<p>Auto Trade: " + data[tier].auto_trade + "</p>";
-                html += "<p>Paper Trading: " + data[tier].paper_trading + "</p>";
-                html += "<p>Delay Minutes: " + data[tier].delay_minutes + "</p>";
-                html += "<p>Email Only: " + data[tier].email_only + "</p>";
-                html += "<p>Symbols: " + data[tier].symbols.join(", ") + "</p>";
-                html += "<p>Features: " + data[tier].features.join(", ") + "</p>";
-                html += "<p>Upgrade Message: " + data[tier].upgrade_message + "</p>";
-                html += "</div>";
-            });
 
-            html += "</div>";
-            document.getElementById("content").innerHTML = html;
-        }
+def get_daily_report(tier):
+    today = datetime.now(timezone.utc).date()
+    today_orders = []
 
-        function renderSignals(data) {
-            let html = "<h2>Tier: " + data.tier + "</h2>";
-            html += "<p>Price: " + data.price + "</p>";
-            html += "<p>Auto Trade: " + data.auto_trade + "</p>";
-            html += "<p>Paper Trading: " + data.paper_trading + "</p>";
-            html += "<p>Delay: " + data.delay_minutes + " minutes</p>";
-            html += "<p>Email Only: " + data.email_only + "</p>";
-            html += "<p>Upgrade: " + data.upgrade_message + "</p>";
-            html += "<p>Crypto Mode: " + data.crypto_mode + "</p>";
-            html += "<div class='grid'>";
+    for order in ORDERS:
+        if order["tier"] != tier:
+            continue
+        try:
+            order_date = datetime.fromisoformat(order["timestamp"]).date()
+            if order_date == today:
+                today_orders.append(order)
+        except Exception:
+            pass
 
-            data.signals.forEach(s => {
-                html += "<div class='card'>";
-                html += "<h2>" + s.symbol + "</h2>";
-                html += "<p>Signal: <span class='" + s.signal + "'>" + s.signal + "</span></p>";
-                html += "<p class='score'>Score: " + s.score + "</p>";
-                html += "<p>Confidence: " + s.confidence + "</p>";
-                html += "<p>Last Price: $" + (s.last_price || "N/A") + "</p>";
-                html += "<p>Reasons: " + ((s.reasons || [s.reason || "none"]).join(", ")) + "</p>";
-                html += "<p>Bars Received: " + (s.bars_received || "N/A") + "</p>";
-                html += "<p>Order Status: " + s.order_status + "</p>";
-                html += "</div>";
-            });
+    open_positions = get_open_positions(tier)
+    total_open_pnl = round(sum(x["pnl_pct"] for x in open_positions), 2)
 
-            html += "</div>";
-            document.getElementById("content").innerHTML = html;
-        }
-
-        loadSignals("pro");
-    </script>
-</body>
-</html>
-'''
-
-@app.route("/signals")
-def signals():
-    tier = request.args.get("tier", "starter")
-    return jsonify(run_bot(tier, execute=False, crypto=False))
-
-@app.route("/crypto")
-def crypto():
-    tier = request.args.get("tier", "mastery_plus")
-    return jsonify(run_bot(tier, execute=False, crypto=True))
-
-@app.route("/trade")
-def trade():
-    tier = request.args.get("tier", "starter")
-    return jsonify(run_bot(tier, execute=True, crypto=False))
-
-@app.route("/report")
-def report():
-    return jsonify(get_account_report())
-
-@app.route("/tiers")
-def tiers():
-    return jsonify(TIERS)
-
-@app.route("/license")
-def license_check():
-    key = request.args.get("key", "")
-    tier = LICENSE_KEYS.get(key)
-
-    if not tier:
-        return jsonify({"valid": False, "tier": None})
-
-    return jsonify({
-        "valid": True,
+    return {
         "tier": tier,
-        "features": TIERS[tier]["features"],
-        "price": TIERS[tier]["price"]
+        "today_orders": len(today_orders),
+        "open_positions": len(open_positions),
+        "open_pnl_pct_sum": total_open_pnl,
+        "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+
+
+@app.route("/")
+def dashboard():
+    tier = request.args.get("tier", "starter")
+    if tier not in TIER_CONFIGS:
+        tier = "starter"
+
+    html = """
+    <!doctype html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <title>AI Stock Agent Dashboard</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+        <style>
+            * { box-sizing: border-box; }
+            body {
+                margin: 0;
+                font-family: Arial, sans-serif;
+                background: #0b1020;
+                color: #f3f5f7;
+            }
+            .wrap {
+                max-width: 1400px;
+                margin: 0 auto;
+                padding: 20px;
+            }
+            .hero {
+                background: linear-gradient(135deg, #10172a, #1e293b, #0f172a);
+                border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 22px;
+                padding: 24px;
+                margin-bottom: 20px;
+                box-shadow: 0 20px 50px rgba(0,0,0,0.25);
+            }
+            .hero h1 {
+                margin: 0 0 10px 0;
+                font-size: 30px;
+            }
+            .hero p {
+                margin: 0;
+                color: #cbd5e1;
+            }
+            .tabs {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 10px;
+                margin-top: 18px;
+            }
+            .tab {
+                text-decoration: none;
+                color: #fff;
+                background: #1f2937;
+                border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 999px;
+                padding: 10px 16px;
+                font-size: 14px;
+            }
+            .tab.active {
+                background: #2563eb;
+            }
+            .panel {
+                background: #111827;
+                border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 20px;
+                padding: 18px;
+                margin-bottom: 20px;
+            }
+            .panel h2 {
+                margin-top: 0;
+                margin-bottom: 14px;
+            }
+            .stats {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+                gap: 14px;
+            }
+            .stat {
+                background: #0f172a;
+                border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 16px;
+                padding: 16px;
+            }
+            .stat .label {
+                font-size: 13px;
+                color: #94a3b8;
+                margin-bottom: 8px;
+            }
+            .stat .value {
+                font-size: 22px;
+                font-weight: bold;
+            }
+            .actions {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 10px;
+                margin-top: 10px;
+            }
+            .btn {
+                border: none;
+                border-radius: 12px;
+                padding: 12px 16px;
+                cursor: pointer;
+                font-weight: bold;
+            }
+            .btn.primary { background: #2563eb; color: #fff; }
+            .btn.green { background: #059669; color: #fff; }
+            .btn.red { background: #dc2626; color: #fff; }
+            .btn.dark { background: #1f2937; color: #fff; }
+            .grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+                gap: 14px;
+            }
+            .card {
+                background: #0f172a;
+                border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 18px;
+                padding: 16px;
+            }
+            .card h3 {
+                margin: 0 0 10px 0;
+                font-size: 20px;
+            }
+            .muted {
+                color: #94a3b8;
+                font-size: 14px;
+            }
+            .pill {
+                display: inline-block;
+                padding: 6px 10px;
+                border-radius: 999px;
+                font-size: 12px;
+                margin-right: 6px;
+                margin-bottom: 6px;
+                background: #1f2937;
+            }
+            .buy { background: rgba(5,150,105,0.25); color: #86efac; }
+            .watch_buy { background: rgba(37,99,235,0.25); color: #93c5fd; }
+            .hold { background: rgba(100,116,139,0.25); color: #cbd5e1; }
+            .watch_sell { background: rgba(245,158,11,0.25); color: #fde68a; }
+            .sell { background: rgba(220,38,38,0.25); color: #fca5a5; }
+            .feature-list {
+                padding-left: 18px;
+                color: #cbd5e1;
+            }
+            .chart-box {
+                background: #0f172a;
+                border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 18px;
+                padding: 12px;
+            }
+            .two-col {
+                display: grid;
+                grid-template-columns: 1.2fr 1fr;
+                gap: 18px;
+            }
+            @media (max-width: 980px) {
+                .two-col {
+                    grid-template-columns: 1fr;
+                }
+            }
+        </style>
+    </head>
+    <body>
+        <div class="wrap">
+            <div class="hero">
+                <h1>AI Stock Agent Dashboard</h1>
+                <p>Better looking dashboard, better product structure, tiered access, paper trading, daily reporting, and live chart view for top tiers.</p>
+                <div class="tabs">
+                    {% for t in tier_order %}
+                        <a class="tab {% if tier == t %}active{% endif %}" href="/?tier={{ t }}">{{ nice_names[t] }}</a>
+                    {% endfor %}
+                    <a class="tab" href="#crypto-section">Crypto</a>
+                    <a class="tab" href="#report-section">Daily Report</a>
+                    <a class="tab" href="#tiers-section">Tiers</a>
+                </div>
+            </div>
+
+            <div class="panel">
+                <div class="stats" id="topStats"></div>
+                <div class="actions" id="actionButtons"></div>
+            </div>
+
+            <div class="two-col">
+                <div class="panel">
+                    <h2>Signals</h2>
+                    <div class="grid" id="signalGrid"></div>
+                </div>
+
+                <div class="panel" id="report-section">
+                    <h2>Daily Report</h2>
+                    <div class="stats" id="reportStats"></div>
+                </div>
+            </div>
+
+            <div class="panel" id="portfolio-section">
+                <h2>Top Tier Portfolio / Bot Positions</h2>
+                <p class="muted">Ultra and Mastery Plus can view portfolio-style charts for symbols the bot has bought or flagged.</p>
+                <div class="grid" id="portfolioGrid"></div>
+            </div>
+
+            <div class="panel" id="crypto-section">
+                <h2>Crypto Signals</h2>
+                <div class="grid" id="cryptoGrid"></div>
+            </div>
+
+            <div class="panel" id="tiers-section">
+                <h2>Subscription Tiers</h2>
+                <div class="grid" id="tierGrid"></div>
+            </div>
+        </div>
+
+        <script>
+            const CURRENT_TIER = "{{ tier }}";
+            const TOP_CHART_TIERS = ["ultra", "mastery_plus"];
+            const LIVE_TIERS = ["mastery_plus"];
+            const chartStore = {};
+
+            function money(v) {
+                return "$" + Number(v || 0).toFixed(2);
+            }
+
+            function badgeClass(signal) {
+                if (signal === "buy") return "pill buy";
+                if (signal === "watch_buy") return "pill watch_buy";
+                if (signal === "watch_sell") return "pill watch_sell";
+                if (signal === "sell") return "pill sell";
+                return "pill hold";
+            }
+
+            async function getJSON(url) {
+                const res = await fetch(url);
+                return await res.json();
+            }
+
+            function renderTopStats(tierInfo, signalsInfo) {
+                const stats = document.getElementById("topStats");
+                const buys = signalsInfo.signals.filter(x => x.signal === "buy").length;
+                const sells = signalsInfo.signals.filter(x => x.signal === "sell").length;
+
+                stats.innerHTML = `
+                    <div class="stat">
+                        <div class="label">Tier</div>
+                        <div class="value">${CURRENT_TIER.replace("_", " ").toUpperCase()}</div>
+                    </div>
+                    <div class="stat">
+                        <div class="label">Price</div>
+                        <div class="value">${tierInfo.price}</div>
+                    </div>
+                    <div class="stat">
+                        <div class="label">Auto Trade</div>
+                        <div class="value">${tierInfo.auto_trade}</div>
+                    </div>
+                    <div class="stat">
+                        <div class="label">Paper Trading</div>
+                        <div class="value">${tierInfo.paper_trading}</div>
+                    </div>
+                    <div class="stat">
+                        <div class="label">Live Trading Allowed</div>
+                        <div class="value">${tierInfo.live_trading_allowed}</div>
+                    </div>
+                    <div class="stat">
+                        <div class="label">Buy Signals</div>
+                        <div class="value">${buys}</div>
+                    </div>
+                    <div class="stat">
+                        <div class="label">Sell Signals</div>
+                        <div class="value">${sells}</div>
+                    </div>
+                    <div class="stat">
+                        <div class="label">Delay</div>
+                        <div class="value">${tierInfo.delay_minutes} min</div>
+                    </div>
+                `;
+            }
+
+            function renderActions(tierInfo) {
+                const actions = document.getElementById("actionButtons");
+                let html = `<button class="btn dark" onclick="refreshAll()">Refresh Dashboard</button>`;
+
+                if (tierInfo.paper_trading) {
+                    html += `<button class="btn primary" onclick="runBot('paper')">Run Paper Bot</button>`;
+                }
+                if (tierInfo.live_trading_allowed) {
+                    html += `<button class="btn red" onclick="runBot('live')">Run Live Bot</button>`;
+                }
+
+                actions.innerHTML = html;
+            }
+
+            function renderSignals(signalsInfo) {
+                const grid = document.getElementById("signalGrid");
+                grid.innerHTML = signalsInfo.signals
+                    .filter(x => !x.symbol.includes("-USD"))
+                    .map(s => `
+                        <div class="card">
+                            <h3>${s.symbol}</h3>
+                            <div class="${badgeClass(s.signal)}">${s.signal}</div>
+                            <p><b>Score:</b> ${s.score}</p>
+                            <p><b>Confidence:</b> ${s.confidence}</p>
+                            <p><b>Last Price:</b> ${money(s.last_price)}</p>
+                            <p><b>Bars Received:</b> ${s.bars_received}</p>
+                            <p><b>Order Status:</b> ${s.order_status}</p>
+                            <p><b>Reasons:</b> ${s.reasons.join(", ")}</p>
+                        </div>
+                    `)
+                    .join("");
+            }
+
+            function renderCrypto(signalsInfo) {
+                const grid = document.getElementById("cryptoGrid");
+                const crypto = signalsInfo.signals.filter(x => x.symbol.includes("-USD"));
+
+                if (!crypto.length) {
+                    grid.innerHTML = `<div class="card"><p>No crypto access on this tier.</p></div>`;
+                    return;
+                }
+
+                grid.innerHTML = crypto.map(s => `
+                    <div class="card">
+                        <h3>${s.symbol}</h3>
+                        <div class="${badgeClass(s.signal)}">${s.signal}</div>
+                        <p><b>Score:</b> ${s.score}</p>
+                        <p><b>Confidence:</b> ${s.confidence}</p>
+                        <p><b>Last Price:</b> ${money(s.last_price)}</p>
+                        <p><b>Bars Received:</b> ${s.bars_received}</p>
+                        <p><b>Order Status:</b> ${s.order_status}</p>
+                        <p><b>Reasons:</b> ${s.reasons.join(", ")}</p>
+                    </div>
+                `).join("");
+            }
+
+            function renderReport(report) {
+                const box = document.getElementById("reportStats");
+                box.innerHTML = `
+                    <div class="stat">
+                        <div class="label">Orders Today</div>
+                        <div class="value">${report.today_orders}</div>
+                    </div>
+                    <div class="stat">
+                        <div class="label">Open Positions</div>
+                        <div class="value">${report.open_positions}</div>
+                    </div>
+                    <div class="stat">
+                        <div class="label">Open PnL % Sum</div>
+                        <div class="value">${report.open_pnl_pct_sum}%</div>
+                    </div>
+                    <div class="stat">
+                        <div class="label">Generated At</div>
+                        <div class="value" style="font-size:16px">${report.generated_at}</div>
+                    </div>
+                `;
+            }
+
+            function renderTiers(tiers) {
+                const grid = document.getElementById("tierGrid");
+                const order = ["starter", "pro", "elite", "ultra", "mastery_plus"];
+
+                grid.innerHTML = order.map(key => {
+                    const t = tiers[key];
+                    return `
+                        <div class="card">
+                            <h3>${key.replace("_", " ").toUpperCase()}</h3>
+                            <p><b>Price:</b> ${t.price}</p>
+                            <p><b>Auto Trade:</b> ${t.auto_trade}</p>
+                            <p><b>Paper Trading:</b> ${t.paper_trading}</p>
+                            <p><b>Live Trading:</b> ${t.live_trading_allowed}</p>
+                            <p><b>Email Only:</b> ${t.email_only}</p>
+                            <p><b>Delay Minutes:</b> ${t.delay_minutes}</p>
+                            <p><b>Stocks:</b> ${t.symbols.join(", ")}</p>
+                            <p><b>Crypto:</b> ${t.crypto_symbols.join(", ")}</p>
+                            <p><b>Upgrade Message:</b> ${t.upgrade_message}</p>
+                            <ul class="feature-list">
+                                ${t.features.map(f => `<li>${f}</li>`).join("")}
+                            </ul>
+                        </div>
+                    `;
+                }).join("");
+            }
+
+            async function renderPortfolio() {
+                const box = document.getElementById("portfolioGrid");
+
+                if (!TOP_CHART_TIERS.includes(CURRENT_TIER)) {
+                    box.innerHTML = `
+                        <div class="card">
+                            <h3>Upgrade needed</h3>
+                            <p>Live portfolio-style graph monitoring is available on Ultra and Mastery Plus.</p>
+                        </div>
+                    `;
+                    return;
+                }
+
+                const data = await getJSON(`/portfolio?tier=${CURRENT_TIER}`);
+
+                if (!data.items.length) {
+                    box.innerHTML = `<div class="card"><p>No positions or active buy previews yet.</p></div>`;
+                    return;
+                }
+
+                box.innerHTML = data.items.map((item, i) => `
+                    <div class="chart-box">
+                        <h3>${item.symbol}</h3>
+                        <p><b>Entry:</b> ${money(item.entry_price)} | <b>Current:</b> ${money(item.current_price)} | <b>PnL:</b> ${item.pnl_pct}%</p>
+                        <p><b>Mode:</b> ${item.mode}</p>
+                        <canvas id="chart_${i}" height="120"></canvas>
+                    </div>
+                `).join("");
+
+                for (let i = 0; i < data.items.length; i++) {
+                    await drawChart(`chart_${i}`, data.items[i].symbol);
+                }
+            }
+
+            async function drawChart(canvasId, symbol) {
+                const data = await getJSON(`/chart-data?symbol=${encodeURIComponent(symbol)}`);
+                const ctx = document.getElementById(canvasId).getContext("2d");
+
+                if (chartStore[canvasId]) {
+                    chartStore[canvasId].destroy();
+                }
+
+                chartStore[canvasId] = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: data.labels,
+                        datasets: [{
+                            label: symbol,
+                            data: data.prices,
+                            tension: 0.25,
+                            borderWidth: 2,
+                            fill: false
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { labels: { color: "#f3f5f7" } }
+                        },
+                        scales: {
+                            x: { ticks: { color: "#cbd5e1" }, grid: { color: "rgba(255,255,255,0.08)" } },
+                            y: { ticks: { color: "#cbd5e1" }, grid: { color: "rgba(255,255,255,0.08)" } }
+                        }
+                    }
+                });
+            }
+
+            async function runBot(mode) {
+                await getJSON(`/trade?tier=${CURRENT_TIER}&mode=${mode}`);
+                await refreshAll();
+            }
+
+            async function refreshAll() {
+                const [tiers, signals, report] = await Promise.all([
+                    getJSON("/tiers"),
+                    getJSON(`/signals?tier=${CURRENT_TIER}`),
+                    getJSON(`/report?tier=${CURRENT_TIER}`)
+                ]);
+
+                renderTopStats(tiers[CURRENT_TIER], signals);
+                renderActions(tiers[CURRENT_TIER]);
+                renderSignals(signals);
+                renderCrypto(signals);
+                renderReport(report);
+                renderTiers(tiers);
+                await renderPortfolio();
+            }
+
+            refreshAll();
+            setInterval(refreshAll, CURRENT_TIER === "starter" ? 120000 : 30000);
+        </script>
+    </body>
+    </html>
+    """
+    return render_template_string(
+        html,
+        tier=tier,
+        tier_order=TIER_ORDER,
+        nice_names=NICE_NAMES
+    )
+
+
+@app.route("/status")
+def status():
+    return jsonify({
+        "status": "AI STOCK AGENT RUNNING",
+        "routes": ["/signals?tier=pro", "/trade?tier=ultra", "/tiers", "/report", "/portfolio", "/chart-data", "/debug"],
+        "auto_trade": False
     })
+
 
 @app.route("/debug")
 def debug():
     return jsonify({
-        "api_key_loaded": API_KEY is not None and len(API_KEY) > 5,
-        "secret_key_loaded": SECRET_KEY is not None and len(SECRET_KEY) > 5,
-        "auto_trade": AUTO_TRADE,
-        "base_url": BASE_URL
+        "api_key_loaded": bool(API_KEY),
+        "secret_key_loaded": bool(SECRET_KEY),
+        "paper_url": PAPER_URL,
+        "live_url": LIVE_URL
     })
+
+
+@app.route("/tiers")
+@app.route("/api/tiers")
+def tiers():
+    return jsonify(TIER_CONFIGS)
+
+
+@app.route("/signals")
+@app.route("/api/signals")
+def signals():
+    tier = request.args.get("tier", "starter")
+    return jsonify(get_signals_for_tier(tier))
+
+
+@app.route("/trade")
+@app.route("/api/trade")
+def trade():
+    tier = request.args.get("tier", "starter")
+    mode = request.args.get("mode", "paper")
+    return jsonify(execute_trade_cycle(tier, mode))
+
+
+@app.route("/portfolio")
+@app.route("/api/portfolio")
+def portfolio():
+    tier = request.args.get("tier", "starter")
+    return jsonify({
+        "tier": tier,
+        "items": get_open_positions(tier)
+    })
+
+
+@app.route("/report")
+@app.route("/api/report")
+def report():
+    tier = request.args.get("tier", "starter")
+    return jsonify(get_daily_report(tier))
+
+
+@app.route("/chart-data")
+@app.route("/api/chart-data")
+def chart_data():
+    symbol = request.args.get("symbol", "AAPL")
+    df = get_data(symbol, period="1d", interval="5m")
+
+    if df.empty:
+        return jsonify({"symbol": symbol, "labels": [], "prices": []})
+
+    labels = []
+    for idx in df.index:
+        try:
+            labels.append(idx.strftime("%H:%M"))
+        except Exception:
+            labels.append(str(idx))
+
+    prices = [round(float(x), 2) for x in df["close"].tolist()]
+
+    return jsonify({
+        "symbol": symbol,
+        "labels": labels,
+        "prices": prices
+    })
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
