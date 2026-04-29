@@ -58,15 +58,25 @@ TIERS = {
         "min_score_buy": 65,
         "max_score_sell": 35,
         "auto_trade": True,
-        "features": ["top tier", "largest stock list", "automation", "premium signal engine"]
+        "features": ["top tier", "largest stock list", "automation", "premium signal engine", "crypto watchlist", "daily report"]
     }
+}
+
+CRYPTO_SYMBOLS = ["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD"]
+
+LICENSE_KEYS = {
+    "STARTER-DEMO": "starter",
+    "PRO-DEMO": "pro",
+    "ELITE-DEMO": "elite",
+    "ULTRA-DEMO": "ultra",
+    "MASTER-DEMO": "mastery_plus"
 }
 
 # =========================
 # DATA ENGINE
 # =========================
 def get_data(symbol):
-    if api:
+    if api and "-" not in symbol:
         try:
             bars = api.get_bars(
                 symbol,
@@ -77,8 +87,6 @@ def get_data(symbol):
 
             if bars is not None and not bars.empty:
                 return bars[["open", "high", "low", "close", "volume"]]
-
-            print(f"ALPACA EMPTY DATA FOR {symbol}")
 
         except Exception as e:
             print(f"ALPACA DATA ERROR FOR {symbol}: {e}")
@@ -146,7 +154,7 @@ def calculate_indicators(df):
     return df.dropna()
 
 # =========================
-# AI-STYLE SCORING ENGINE
+# SCORING ENGINE
 # =========================
 def score_symbol(df, tier_config):
     latest = df.iloc[-1]
@@ -276,17 +284,76 @@ def generate_signal(symbol, tier_config):
         }
 
 # =========================
+# ACCOUNT REPORT
+# =========================
+def get_account_report():
+    if not api:
+        return {
+            "status": "error",
+            "reason": "alpaca_api_not_loaded"
+        }
+
+    try:
+        account = api.get_account()
+        positions = api.list_positions()
+
+        open_positions = []
+        total_unrealized_pl = 0.0
+        total_intraday_pl = 0.0
+
+        for p in positions:
+            unrealized_pl = float(p.unrealized_pl)
+            intraday_pl = float(getattr(p, "unrealized_intraday_pl", 0) or 0)
+
+            total_unrealized_pl += unrealized_pl
+            total_intraday_pl += intraday_pl
+
+            open_positions.append({
+                "symbol": p.symbol,
+                "qty": p.qty,
+                "market_value": p.market_value,
+                "avg_entry_price": p.avg_entry_price,
+                "current_price": p.current_price,
+                "unrealized_pl": p.unrealized_pl,
+                "unrealized_intraday_pl": getattr(p, "unrealized_intraday_pl", "0")
+            })
+
+        return {
+            "status": "ok",
+            "account_status": account.status,
+            "cash": account.cash,
+            "buying_power": account.buying_power,
+            "portfolio_value": account.portfolio_value,
+            "equity": account.equity,
+            "total_unrealized_pl": round(total_unrealized_pl, 2),
+            "today_unrealized_pl": round(total_intraday_pl, 2),
+            "positions": open_positions
+        }
+
+    except Exception as e:
+        return {
+            "status": "error",
+            "reason": str(e)
+        }
+
+# =========================
 # BOT RUNNER
 # =========================
-def run_bot(tier_name, execute=False):
+def run_bot(tier_name, execute=False, crypto=False):
     tier_config = TIERS.get(tier_name, TIERS["starter"])
+
+    if crypto:
+        symbols = CRYPTO_SYMBOLS
+    else:
+        symbols = tier_config["symbols"]
+
     results = []
 
-    for symbol in tier_config["symbols"]:
+    for symbol in symbols:
         data = generate_signal(symbol, tier_config)
         order_status = "not_executed"
 
-        if execute and AUTO_TRADE and tier_config["auto_trade"] and api:
+        if execute and AUTO_TRADE and tier_config["auto_trade"] and api and "-" not in symbol:
             try:
                 if data["signal"] == "buy":
                     api.submit_order(
@@ -317,6 +384,7 @@ def run_bot(tier_name, execute=False):
     return {
         "tier": tier_name,
         "auto_trade": AUTO_TRADE and tier_config["auto_trade"],
+        "crypto_mode": crypto,
         "signals": results
     }
 
@@ -331,25 +399,56 @@ def home():
         "routes": [
             "/dashboard",
             "/signals?tier=pro",
+            "/signals?tier=mastery_plus",
+            "/crypto?tier=mastery_plus",
             "/trade?tier=ultra",
+            "/report",
             "/tiers",
-            "/debug"
+            "/debug",
+            "/license?key=PRO-DEMO"
         ]
     })
 
 @app.route("/signals")
 def signals():
     tier = request.args.get("tier", "starter")
-    return jsonify(run_bot(tier, execute=False))
+    return jsonify(run_bot(tier, execute=False, crypto=False))
+
+@app.route("/crypto")
+def crypto():
+    tier = request.args.get("tier", "mastery_plus")
+    return jsonify(run_bot(tier, execute=False, crypto=True))
 
 @app.route("/trade")
 def trade():
     tier = request.args.get("tier", "starter")
-    return jsonify(run_bot(tier, execute=True))
+    return jsonify(run_bot(tier, execute=True, crypto=False))
+
+@app.route("/report")
+def report():
+    return jsonify(get_account_report())
 
 @app.route("/tiers")
 def tiers():
     return jsonify(TIERS)
+
+@app.route("/license")
+def license_check():
+    key = request.args.get("key", "")
+    tier = LICENSE_KEYS.get(key)
+
+    if not tier:
+        return jsonify({
+            "valid": False,
+            "tier": None
+        })
+
+    return jsonify({
+        "valid": True,
+        "tier": tier,
+        "features": TIERS[tier]["features"],
+        "price": TIERS[tier]["price"]
+    })
 
 @app.route("/debug")
 def debug():
@@ -374,9 +473,8 @@ def dashboard():
                 font-family: Arial, sans-serif;
                 padding: 30px;
             }
-            h1 {
-                color: #38bdf8;
-            }
+            h1 { color: #38bdf8; }
+            h2 { color: #e0f2fe; }
             button {
                 padding: 10px 15px;
                 margin: 5px;
@@ -393,21 +491,14 @@ def dashboard():
                 margin: 15px 0;
                 border-radius: 12px;
             }
-            .buy {
-                color: #22c55e;
-                font-weight: bold;
-            }
-            .sell {
-                color: #ef4444;
-                font-weight: bold;
-            }
-            .hold, .watch_buy, .watch_sell {
-                color: #facc15;
-                font-weight: bold;
-            }
-            .score {
-                font-size: 22px;
-                font-weight: bold;
+            .buy { color: #22c55e; font-weight: bold; }
+            .sell { color: #ef4444; font-weight: bold; }
+            .hold, .watch_buy, .watch_sell { color: #facc15; font-weight: bold; }
+            .score { font-size: 22px; font-weight: bold; }
+            .grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+                gap: 15px;
             }
         </style>
     </head>
@@ -420,45 +511,40 @@ def dashboard():
         <button onclick="loadSignals('elite')">Elite</button>
         <button onclick="loadSignals('ultra')">Ultra</button>
         <button onclick="loadSignals('mastery_plus')">Mastery Plus</button>
+        <button onclick="loadCrypto()">Crypto</button>
+        <button onclick="loadReport()">Daily Report</button>
 
+        <div id="report"></div>
         <div id="signals"></div>
 
         <script>
             async function loadSignals(tier) {
-                document.getElementById("signals").innerHTML = "<p>Loading...</p>";
+                document.getElementById("report").innerHTML = "";
+                document.getElementById("signals").innerHTML = "<p>Loading signals...</p>";
 
                 const res = await fetch("/signals?tier=" + tier);
                 const data = await res.json();
 
-                let html = "<h2>Tier: " + data.tier + "</h2>";
-                html += "<p>Auto Trade: " + data.auto_trade + "</p>";
-
-                data.signals.forEach(s => {
-                    html += `
-                        <div class="card">
-                            <h2>${s.symbol}</h2>
-                            <p>Signal: <span class="${s.signal}">${s.signal}</span></p>
-                            <p class="score">Score: ${s.score}</p>
-                            <p>Confidence: ${s.confidence}</p>
-                            <p>Last Price: $${s.last_price || "N/A"}</p>
-                            <p>Reasons: ${(s.reasons || [s.reason || "none"]).join(", ")}</p>
-                            <p>Bars Received: ${s.bars_received || "N/A"}</p>
-                            <p>Order Status: ${s.order_status}</p>
-                        </div>
-                    `;
-                });
-
-                document.getElementById("signals").innerHTML = html;
+                renderSignals(data);
             }
 
-            loadSignals("pro");
-        </script>
-    </body>
-    </html>
-    """
+            async function loadCrypto() {
+                document.getElementById("report").innerHTML = "";
+                document.getElementById("signals").innerHTML = "<p>Loading crypto...</p>";
 
-# =========================
-# START
-# =========================
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+                const res = await fetch("/crypto?tier=mastery_plus");
+                const data = await res.json();
+
+                renderSignals(data);
+            }
+
+            async function loadReport() {
+                document.getElementById("signals").innerHTML = "";
+                document.getElementById("report").innerHTML = "<p>Loading report...</p>";
+
+                const res = await fetch("/report");
+                const data = await res.json();
+
+                let html = "<h2>Daily Account Report</h2>";
+                html += `<div class="card">
+                   
