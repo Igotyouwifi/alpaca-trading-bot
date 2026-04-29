@@ -447,7 +447,73 @@ def execute_trade_cycle(tier, mode="paper"):
     for item in signals_data["signals"]:
         item = dict(item)
 
- if item["bars_received"] == 0 or item["last    return round(price, 2)
+        if item["bars_received"] == 0 or item["last_price"] == 0:
+            item["order_status"] = "not_executed_no_data"
+            results.append(item)
+            continue
+
+        trade_side = None
+
+        if item["signal"] == "buy":
+            trade_side = "buy"
+        elif item["signal"] == "sell":
+            trade_side = "sell"
+
+        if trade_side is None:
+            item["order_status"] = "not_executed"
+            results.append(item)
+            continue
+
+        if mode == "paper":
+            if not cfg["paper_trading"]:
+                item["order_status"] = "paper_trading_not_allowed"
+            else:
+                item["order_status"] = f"paper_{trade_side}"
+                ORDERS.append({
+                    "symbol": item["symbol"],
+                    "side": trade_side,
+                    "entry_price": item["last_price"],
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "mode": "paper",
+                    "tier": tier
+                })
+
+        elif mode == "live":
+            if not cfg["live_trading_allowed"]:
+                item["order_status"] = "live_trading_not_allowed"
+            elif not LIVE_TRADING_ENABLED:
+                item["order_status"] = "live_trading_disabled_in_environment"
+            else:
+                item["order_status"] = place_live_order(item["symbol"], trade_side, qty=1)
+
+        else:
+            item["order_status"] = "invalid_mode"
+
+        results.append(item)
+
+    return {
+        "tier": tier,
+        "mode": mode,
+        "signals": results
+    }
+
+
+def latest_price(symbol):
+    df = get_data(symbol, period="1d", interval="5m")
+
+    if df.empty:
+        return 0
+
+    try:
+        price = float(df["close"].iloc[-1])
+
+        if not np.isfinite(price) or price <= 0:
+            return 0
+
+        return round(price, 2)
+
+    except Exception:
+        return 0
 
 
 def get_open_positions(tier):
