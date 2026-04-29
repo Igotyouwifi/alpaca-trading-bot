@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 import pandas as pd
 import numpy as np
 import yfinance as yf
+import requests
+import uuid
 
 try:
     import alpaca_trade_api as tradeapi
@@ -27,6 +29,11 @@ LIVE_TRADING_ENABLED = os.getenv("LIVE_TRADING_ENABLED", "false").lower() == "tr
 # Internal demo/paper state. This does NOT place Alpaca paper orders.
 ORDERS = []
 POSITIONS = {}
+
+# Server-side broker sessions. Secrets are never sent back to the browser.
+# This persists through page refresh while the Render service process stays alive.
+# For permanent production storage, use encrypted DB/secret manager, not browser localStorage.
+BROKER_CONNECTIONS = {}
 
 TRADE_COOLDOWN_SECONDS = 60 * 60
 MAX_TRADES_PER_SYMBOL_PER_DAY = 1
@@ -450,6 +457,84 @@ def get_signals_for_tier(tier):
         "signals": signals
     }
 
+
+
+def mask_secret(value):
+    if not value:
+        return ""
+    value = str(value)
+    if len(value) <= 8:
+        return value[:2] + "****"
+    return value[:4] + "****" + value[-4:]
+
+
+def alpaca_base_for_mode(mode):
+    return LIVE_URL if mode == "live" else PAPER_URL
+
+
+def test_alpaca_credentials(api_key, secret_key, mode="paper"):
+    base_url = alpaca_base_for_mode(mode)
+    url = base_url.rstrip("/") + "/v2/account"
+
+    headers = {
+        "APCA-API-KEY-ID": api_key,
+        "APCA-API-SECRET-KEY": secret_key
+    }
+
+    try:
+        response = requests.get(url, headers=headers, timeout=12)
+
+        if response.status_code != 200:
+            return {
+                "ok": False,
+                "status_code": response.status_code,
+                "message": "Connection failed. Check the key, secret, and whether it is paper or live."
+            }
+
+        data = response.json()
+
+        return {
+            "ok": True,
+            "status_code": response.status_code,
+            "account_status": data.get("status", "unknown"),
+            "trading_blocked": data.get("trading_blocked", None),
+            "account_blocked": data.get("account_blocked", None),
+            "currency": data.get("currency", "USD"),
+            "buying_power": data.get("buying_power", None),
+            "portfolio_value": data.get("portfolio_value", None),
+            "message": "Connected successfully."
+        }
+
+    except Exception as e:
+        return {
+            "ok": False,
+            "status_code": 0,
+            "message": "Connection error: " + str(e)[:120]
+        }
+
+
+def broker_status_from_token(token):
+    item = BROKER_CONNECTIONS.get(token)
+
+    if not item:
+        return {
+            "connected": False,
+            "message": "No broker connected on this server session."
+        }
+
+    return {
+        "connected": True,
+        "mode": item.get("mode", "paper"),
+        "api_key_masked": mask_secret(item.get("api_key", "")),
+        "account_status": item.get("account_status", "unknown"),
+        "trading_blocked": item.get("trading_blocked", None),
+        "account_blocked": item.get("account_blocked", None),
+        "currency": item.get("currency", "USD"),
+        "buying_power": item.get("buying_power", None),
+        "portfolio_value": item.get("portfolio_value", None),
+        "live_trading_enabled": LIVE_TRADING_ENABLED,
+        "message": "Broker connected. Secret is stored server-side only for this running session."
+    }
 
 def get_alpaca_client(mode="paper"):
     if not tradeapi or not API_KEY or not SECRET_KEY:
@@ -915,6 +1000,25 @@ def dashboard():
             outline: 2px solid rgba(255,255,255,.18);
             box-shadow: 0 0 0 3px var(--glow), 0 12px 28px rgba(0,0,0,.22);
         }
+        select {
+            background:#091120;
+            color:white;
+            border:1px solid var(--border);
+            border-radius:14px;
+            padding:12px 15px;
+            font-weight:800;
+            outline:none;
+        }
+        select:focus { border-color: var(--accent); box-shadow: 0 0 0 4px var(--glow); }
+        .broker-grid {
+            display:grid;
+            grid-template-columns: 1.1fr .9fr;
+            gap:14px;
+        }
+        .broker-form input { min-width: 210px; }
+        .broker-connect {
+            border-color: rgba(34,197,94,.22);
+        }
         input {
             background:#091120;
             color:white;
@@ -1090,6 +1194,7 @@ def dashboard():
             .tier-glance { grid-template-columns: 1fr; }
             .warning-top { flex-direction:column; align-items:flex-start; }
             .warning-mini { white-space:normal; }
+            .broker-grid { grid-template-columns:1fr; }
         }
     </style>
 </head>
@@ -1154,6 +1259,40 @@ def dashboard():
         </div>
     </section>
 
+    <section class="panel broker-connect">
+        <div class="topbar">
+            <div>
+                <h2>Broker Connection</h2>
+                <p class="muted">Connect Alpaca Paper or Live keys. The secret is sent to the server for verification and never displayed back.</p>
+            </div>
+            <div class="badge" id="brokerBadge">Broker: Not connected</div>
+        </div>
+
+        <div class="broker-grid">
+            <div class="card">
+                <h3>Connect Account</h3>
+                <div class="actions broker-form">
+                    <select id="brokerMode">
+                        <option value="paper">Alpaca Paper</option>
+                        <option value="live">Alpaca Live</option>
+                    </select>
+                    <input id="brokerKey" placeholder="Alpaca API Key">
+                    <input id="brokerSecret" type="password" placeholder="Alpaca Secret Key">
+                    <button onclick="connectBroker()" class="green">Connect Broker</button>
+                    <button onclick="disconnectBroker()" class="dark">Disconnect</button>
+                </div>
+                <p class="footer-note">For live trading, connection can be successful while real live orders remain blocked unless LIVE_TRADING_ENABLED=true.</p>
+            </div>
+
+            <div class="card">
+                <h3>Connection Status</h3>
+                <div class="rows" id="brokerStatusRows">
+                    <div class="row"><span>Status</span><b>Not connected</b></div>
+                </div>
+            </div>
+        </div>
+    </section>
+
     <section class="panel">
         <div class="topbar">
             <div>
@@ -1215,6 +1354,7 @@ def dashboard():
 let currentTier = localStorage.getItem("tier") || "starter";
 let licenseKey = localStorage.getItem("licenseKey") || "";
 let selectedTheme = localStorage.getItem("selectedTheme") || "";
+let brokerToken = localStorage.getItem("brokerToken") || "";
 let charts = {};
 
 const TIER_RANK = ["starter", "pro", "elite", "ultra", "mastery_plus"];
@@ -1697,13 +1837,196 @@ async function drawChart(id, symbol) {
     });
 }
 
+
+function brokerRows(data) {
+    if (!data.connected) {
+        document.getElementById("brokerBadge").innerText = "Broker: Not connected";
+        document.getElementById("brokerStatusRows").innerHTML = `
+            <div class="row"><span>Status</span><b>Not connected</b></div>
+            <div class="row"><span>Message</span><b>${data.message || "Connect your account"}</b></div>
+        `;
+        return;
+    }
+
+    const liveWarning = data.mode === "live" && !data.live_trading_enabled
+        ? "Live connected, live orders still blocked"
+        : "Connected";
+
+    document.getElementById("brokerBadge").innerText = `Broker: ${data.mode.toUpperCase()} connected`;
+
+    document.getElementById("brokerStatusRows").innerHTML = `
+        <div class="row"><span>Status</span><b>${liveWarning}</b></div>
+        <div class="row"><span>Mode</span><b>${data.mode}</b></div>
+        <div class="row"><span>Key</span><b>${data.api_key_masked || "masked"}</b></div>
+        <div class="row"><span>Account</span><b>${data.account_status || "unknown"}</b></div>
+        <div class="row"><span>Trading Blocked</span><b>${data.trading_blocked}</b></div>
+        <div class="row"><span>Currency</span><b>${data.currency || "USD"}</b></div>
+        <div class="row"><span>Buying Power</span><b>${data.buying_power || "hidden"}</b></div>
+        <div class="row"><span>Live Orders Enabled</span><b>${data.live_trading_enabled}</b></div>
+    `;
+}
+
+async function loadBrokerStatus() {
+    if (!brokerToken) {
+        brokerRows({ connected: false, message: "No broker connected." });
+        return;
+    }
+
+    try {
+        const res = await fetch("/broker/status?token=" + encodeURIComponent(brokerToken));
+        const data = await res.json();
+
+        if (!data.connected) {
+            localStorage.removeItem("brokerToken");
+            brokerToken = "";
+        }
+
+        brokerRows(data);
+    } catch {
+        brokerRows({ connected: false, message: "Could not check broker status." });
+    }
+}
+
+async function connectBroker() {
+    const apiKey = document.getElementById("brokerKey").value.trim();
+    const secretKey = document.getElementById("brokerSecret").value.trim();
+    const mode = document.getElementById("brokerMode").value;
+
+    brokerRows({ connected: false, message: "Checking broker connection..." });
+
+    try {
+        const res = await fetch("/broker/connect", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                api_key: apiKey,
+                secret_key: secretKey,
+                mode: mode
+            })
+        });
+
+        const data = await res.json();
+
+        if (!res.ok || !data.connected) {
+            brokerRows({ connected: false, message: data.message || "Connection failed." });
+            return;
+        }
+
+        brokerToken = data.token;
+        localStorage.setItem("brokerToken", brokerToken);
+
+        document.getElementById("brokerSecret").value = "";
+        brokerRows(data);
+    } catch {
+        brokerRows({ connected: false, message: "Connection request failed." });
+    }
+}
+
+async function disconnectBroker() {
+    if (brokerToken) {
+        try {
+            await fetch("/broker/disconnect", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ token: brokerToken })
+            });
+        } catch {}
+    }
+
+    brokerToken = "";
+    localStorage.removeItem("brokerToken");
+    document.getElementById("brokerKey").value = "";
+    document.getElementById("brokerSecret").value = "";
+    brokerRows({ connected: false, message: "Broker disconnected." });
+}
+
 applyTheme(currentTier);
 checkLicense();
 loadTier(currentTier);
+loadBrokerStatus();
 </script>
 </body>
 </html>
 """)
+
+
+
+@app.route("/broker/connect", methods=["POST"])
+def broker_connect():
+    payload = request.get_json(silent=True) or {}
+
+    api_key = str(payload.get("api_key", "")).strip()
+    secret_key = str(payload.get("secret_key", "")).strip()
+    mode = str(payload.get("mode", "paper")).strip().lower()
+
+    if mode not in ["paper", "live"]:
+        mode = "paper"
+
+    if not api_key or not secret_key:
+        return jsonify({
+            "connected": False,
+            "message": "Enter both API key and secret key."
+        }), 400
+
+    result = test_alpaca_credentials(api_key, secret_key, mode)
+
+    if not result.get("ok"):
+        return jsonify({
+            "connected": False,
+            "mode": mode,
+            "message": result.get("message", "Connection failed."),
+            "status_code": result.get("status_code", 0)
+        }), 400
+
+    token = uuid.uuid4().hex
+
+    BROKER_CONNECTIONS[token] = {
+        "api_key": api_key,
+        "secret_key": secret_key,
+        "mode": mode,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "account_status": result.get("account_status"),
+        "trading_blocked": result.get("trading_blocked"),
+        "account_blocked": result.get("account_blocked"),
+        "currency": result.get("currency"),
+        "buying_power": result.get("buying_power"),
+        "portfolio_value": result.get("portfolio_value")
+    }
+
+    return jsonify({
+        "connected": True,
+        "token": token,
+        "mode": mode,
+        "api_key_masked": mask_secret(api_key),
+        "account_status": result.get("account_status"),
+        "trading_blocked": result.get("trading_blocked"),
+        "account_blocked": result.get("account_blocked"),
+        "currency": result.get("currency"),
+        "buying_power": result.get("buying_power"),
+        "portfolio_value": result.get("portfolio_value"),
+        "live_trading_enabled": LIVE_TRADING_ENABLED,
+        "message": "Connected successfully. The secret key is not shown again."
+    })
+
+
+@app.route("/broker/status")
+def broker_status():
+    token = request.args.get("token", "")
+    return jsonify(broker_status_from_token(token))
+
+
+@app.route("/broker/disconnect", methods=["POST"])
+def broker_disconnect():
+    payload = request.get_json(silent=True) or {}
+    token = payload.get("token", "")
+
+    if token in BROKER_CONNECTIONS:
+        BROKER_CONNECTIONS.pop(token, None)
+
+    return jsonify({
+        "connected": False,
+        "message": "Broker disconnected."
+    })
 
 
 @app.route("/status")
@@ -1729,12 +2052,18 @@ def status():
             "/report?tier=mastery_plus&key=MASTER-PAID",
             "/chart-data?symbol=AAPL",
             "/license?key=PRO-PAID",
+            "/broker/connect",
+            "/broker/status",
+            "/broker/disconnect",
             "/debug"
         ]
     })
 
 
-@app.route("/debug")
+@app.route("/broker/connect",
+            "/broker/status",
+            "/broker/disconnect",
+            "/debug")
 def debug():
     return jsonify({
         "api_key_loaded": bool(API_KEY),
@@ -1743,7 +2072,8 @@ def debug():
         "live_url": LIVE_URL,
         "live_trading_enabled": LIVE_TRADING_ENABLED,
         "open_internal_positions": len(POSITIONS),
-        "internal_orders": len(ORDERS)
+        "internal_orders": len(ORDERS),
+        "broker_sessions": len(BROKER_CONNECTIONS)
     })
 
 
