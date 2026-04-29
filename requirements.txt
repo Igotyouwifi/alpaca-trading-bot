@@ -1,5 +1,6 @@
 flask
-alpaca-trade-api
-pandas
 gunicorn
+pandas
+numpy
 yfinance
+alpaca-trade-api
