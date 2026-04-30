@@ -3,3 +3,4 @@ gunicorn==25.3.0
 pandas==3.0.2
 numpy==2.4.4
 yfinance==0.2.58
+requests==2.33.1
