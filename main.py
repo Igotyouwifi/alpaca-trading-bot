@@ -6,6 +6,7 @@ import numpy as np
 import yfinance as yf
 import requests
 import uuid
+import time
 
 try:
     import alpaca_trade_api as tradeapi
@@ -47,6 +48,12 @@ POSITIONS = {}
 # This persists through page refresh while the Render service process stays alive.
 # For permanent production storage, use encrypted DB/secret manager, not browser localStorage.
 BROKER_CONNECTIONS = {}
+
+# Lightweight in-memory cache so Mastery Plus does not hang from repeated data calls.
+DATA_CACHE = {}
+SIGNAL_CACHE = {}
+MARKET_REGIME_CACHE = {"timestamp": 0, "data": None}
+CACHE_SECONDS = 180
 
 TRADE_COOLDOWN_SECONDS = 60 * 60
 MAX_TRADES_PER_SYMBOL_PER_DAY = 1
@@ -278,28 +285,54 @@ def locked_response(requested_tier):
     }), 403
 
 
+
 def get_watchlist(tier):
     cfg = get_config(tier)
-    return cfg["symbols"] + cfg["crypto_symbols"]
+    symbols = cfg["symbols"] + cfg["crypto_symbols"]
 
+    # Fast app mode: Mastery Plus keeps global access but dashboard loads a high-quality rotating core list first.
+    # This prevents mobile/browser timeouts and makes the app feel fast.
+    if tier == "mastery_plus":
+        symbols = (
+            cfg["symbols"][:28] +
+            cfg["crypto_symbols"][:10]
+        )
+
+    return symbols
 
 def get_data(symbol, period="5d", interval="5m"):
+    cache_key = f"{symbol}|{period}|{interval}"
+    now = time.time()
+
+    cached = DATA_CACHE.get(cache_key)
+    if cached and now - cached["timestamp"] < CACHE_SECONDS:
+        return cached["data"].copy()
+
     try:
-        df = yf.Ticker(symbol).history(period=period, interval=interval, auto_adjust=True, prepost=False)
+        df = yf.Ticker(symbol).history(
+            period=period,
+            interval=interval,
+            auto_adjust=True,
+            prepost=False
+        )
 
         if df is None or df.empty:
+            DATA_CACHE[cache_key] = {"timestamp": now, "data": pd.DataFrame()}
             return pd.DataFrame()
 
-        df = df.rename(columns=str.lower).dropna()
+        df = df.rename(columns=str.lower)
+        df = df.dropna()
 
         if "close" not in df.columns:
+            DATA_CACHE[cache_key] = {"timestamp": now, "data": pd.DataFrame()}
             return pd.DataFrame()
 
+        DATA_CACHE[cache_key] = {"timestamp": now, "data": df.copy()}
         return df
 
     except Exception:
+        DATA_CACHE[cache_key] = {"timestamp": now, "data": pd.DataFrame()}
         return pd.DataFrame()
-
 
 def compute_rsi(close, period=14):
     delta = close.diff()
@@ -341,15 +374,24 @@ def compute_atr(df, period=14):
         return pd.Series([0] * len(df))
 
 
+
 def calculate_market_regime():
+    now = time.time()
+
+    if MARKET_REGIME_CACHE.get("data") and now - MARKET_REGIME_CACHE.get("timestamp", 0) < CACHE_SECONDS:
+        return dict(MARKET_REGIME_CACHE["data"])
+
     df = get_data(ADVANCED_ENGINE_CONFIG["market_regime_symbol"], period="1mo", interval="1d")
 
     if df.empty or len(df) < 20:
-        return {
+        data = {
             "regime": "unknown",
             "risk_mode": "cautious",
             "reason": "market_regime_data_unavailable"
         }
+        MARKET_REGIME_CACHE["timestamp"] = now
+        MARKET_REGIME_CACHE["data"] = data
+        return dict(data)
 
     close = df["close"].dropna()
     ema10 = close.ewm(span=10, adjust=False).mean()
@@ -361,32 +403,33 @@ def calculate_market_regime():
     vol = safe_float(close.pct_change().dropna().tail(10).std())
 
     if last > e10 > e20 and vol < 0.025:
-        return {
+        data = {
             "regime": "bullish",
             "risk_mode": "normal",
             "reason": "spy_above_ema10_ema20"
         }
-
-    if last < e10 < e20:
-        return {
+    elif last < e10 < e20:
+        data = {
             "regime": "bearish",
             "risk_mode": "defensive",
             "reason": "spy_below_ema10_ema20"
         }
-
-    if vol >= 0.025:
-        return {
+    elif vol >= 0.025:
+        data = {
             "regime": "volatile",
             "risk_mode": "reduced",
             "reason": "market_volatility_elevated"
         }
+    else:
+        data = {
+            "regime": "mixed",
+            "risk_mode": "cautious",
+            "reason": "market_trend_mixed"
+        }
 
-    return {
-        "regime": "mixed",
-        "risk_mode": "cautious",
-        "reason": "market_trend_mixed"
-    }
-
+    MARKET_REGIME_CACHE["timestamp"] = now
+    MARKET_REGIME_CACHE["data"] = data
+    return dict(data)
 
 def build_risk_plan(symbol, last_price, atr_value, score, confidence, cfg):
     last_price = safe_float(last_price)
@@ -618,7 +661,7 @@ def analyze_symbol(symbol):
     if advanced_factors.get("volume") == "low" and confidence == "high":
         confidence = "medium"
 
-    market = calculate_market_regime()
+    market = {"regime": "cached_by_tier", "risk_mode": "cached_by_tier", "reason": "calculated_once_per_tier"}
     risk_plan = build_risk_plan(symbol, last_price, last_atr, score, confidence, get_config("starter"))
 
     return {
@@ -652,9 +695,18 @@ def signal_for_score(score, cfg):
     return "hold"
 
 
+
 def get_signals_for_tier(tier):
     cfg = get_config(tier)
+    cache_key = f"signals|{tier}"
+    now = time.time()
+
+    cached = SIGNAL_CACHE.get(cache_key)
+    if cached and now - cached["timestamp"] < CACHE_SECONDS:
+        return dict(cached["data"])
+
     signals = []
+    market_regime = calculate_market_regime()
 
     for symbol in get_watchlist(tier):
         result = analyze_symbol(symbol)
@@ -665,8 +717,11 @@ def get_signals_for_tier(tier):
             result["confidence"] = "none"
             result["reasons"] = ["no_data_available_hold_only"]
             result["order_status"] = "not_executed"
+            result["market_regime"] = market_regime
         else:
             result["signal"] = signal_for_score(result["score"], cfg)
+            result["market_regime"] = market_regime
+
             if result.get("last_price", 0) > 0 and "risk_plan" in result:
                 result["risk_plan"] = build_risk_plan(
                     result["symbol"],
@@ -679,12 +734,12 @@ def get_signals_for_tier(tier):
                 result["ai_quality"] = ai_quality_label(
                     result["score"],
                     result["confidence"],
-                    result.get("market_regime", {}).get("regime", "unknown")
+                    market_regime.get("regime", "unknown")
                 )
 
         signals.append(result)
 
-    return {
+    data = {
         "tier": tier,
         "name": cfg["name"],
         "price": cfg["price"],
@@ -697,11 +752,13 @@ def get_signals_for_tier(tier):
         "login_options": cfg["login_options"],
         "broker_options": cfg["broker_options"],
         "engine": ADVANCED_ENGINE_CONFIG,
-        "market_regime": calculate_market_regime(),
+        "market_regime": market_regime,
+        "cache_seconds": CACHE_SECONDS,
         "signals": signals
     }
 
-
+    SIGNAL_CACHE[cache_key] = {"timestamp": now, "data": data}
+    return dict(data)
 
 def mask_secret(value):
     if not value:
@@ -1774,7 +1831,7 @@ def dashboard():
                     <span>Robotic Lion Trading Bot</span>
                 </div>
             </div>
-            <div class="app-status-pill">LIVE â¢ Service Online</div>
+            <div class="app-status-pill">LIVE - Service Online</div>
         </div>
     <section class="warning-top">
         <div>
@@ -1787,7 +1844,7 @@ def dashboard():
         <div class="topbar">
             <div>
                 <div class="hero-meta">
-                    <div class="badge">LIVE â¢ LionTrade AI Running</div>
+                    <div class="badge">LIVE - LionTrade AI Running</div>
                     <div class="badge theme-badge" id="themeBadge">Starter Theme Active</div>
                 </div>
                 <h1>LionTrade AI Dashboard</h1>
@@ -2179,7 +2236,7 @@ function renderThemePicker() {
 }
 
 function accessText(valid, name) {
-    return valid ? `Unlocked: ${name}` : "Locked â payment/license required.";
+    return valid ? `Unlocked: ${name}` : "Locked - payment/license required.";
 }
 
 async function getJSON(url) {
@@ -2202,7 +2259,7 @@ function clearKey() {
     licenseKey = "";
     localStorage.removeItem("licenseKey");
     document.getElementById("licenseInput").value = "";
-    document.getElementById("licenseStatus").innerText = "Locked â payment/license required.";
+    document.getElementById("licenseStatus").innerText = "Locked - payment/license required.";
     applyTheme("starter");
     loadTier("starter");
 }
@@ -2214,7 +2271,7 @@ async function checkLicense() {
         document.getElementById("licenseStatus").innerText = accessText(data.valid, data.name || data.tier || "tier");
         document.getElementById("miniMode").innerText = data.valid ? "Unlocked" : "Locked";
     } catch {
-        document.getElementById("licenseStatus").innerText = "Locked â payment/license required.";
+        document.getElementById("licenseStatus").innerText = "Locked - payment/license required.";
         document.getElementById("miniMode").innerText = "Locked";
     }
 }
@@ -2260,7 +2317,7 @@ async function loadTier(tier) {
 
     const t = tiers[tier];
 
-    document.getElementById("title").innerText = t.name + " â " + t.price;
+    document.getElementById("title").innerText = t.name + " - " + t.price;
     document.getElementById("subtitle").innerText = t.upgrade_message || "";
 
     const buyCount = data.signals.filter(s => s.signal === "buy").length;
@@ -2408,7 +2465,7 @@ async function loadReport() {
         const report = await getJSON("/report?tier=" + currentTier);
         document.getElementById("details").innerHTML = `
             <div class="card">
-                <h3>Daily Report â ${currentTier}</h3>
+                <h3>Daily Report - ${currentTier}</h3>
                 <p><b>Orders Today:</b> ${report.today_orders}</p>
                 <p><b>Open Positions:</b> ${report.open_positions}</p>
                 <p><b>Open PnL % Sum:</b> ${report.open_pnl_pct_sum}%</p>
@@ -2789,6 +2846,19 @@ def apple_touch_icon():
     return app.response_class(svg, mimetype="image/svg+xml")
 
 
+
+@app.route("/clear-cache")
+def clear_cache():
+    DATA_CACHE.clear()
+    SIGNAL_CACHE.clear()
+    MARKET_REGIME_CACHE["timestamp"] = 0
+    MARKET_REGIME_CACHE["data"] = None
+    return jsonify({
+        "ok": True,
+        "message": "Cache cleared."
+    })
+
+
 @app.route("/status")
 def status():
     return jsonify({
@@ -2809,6 +2879,11 @@ def status():
             "Set LIVE_TRADING_ENABLED=true in Render environment",
             "Click Run Live Bot"
         ],
+        "cache": {
+            "data_items": len(DATA_CACHE),
+            "signal_items": len(SIGNAL_CACHE),
+            "cache_seconds": CACHE_SECONDS
+        },
         "routes": [
             "/",
             "/tiers",
