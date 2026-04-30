@@ -27,6 +27,16 @@ LIVE_URL = "https://api.alpaca.markets"
 # Keep this false until everything is tested.
 LIVE_TRADING_ENABLED = os.getenv("LIVE_TRADING_ENABLED", "false").lower() == "true"
 
+# Offline auto-trading controls.
+# Keep AUTO_TRADING_ENABLED=false until you intentionally enable scheduled live trading.
+AUTO_TRADING_ENABLED = os.getenv("AUTO_TRADING_ENABLED", "false").lower() == "true"
+AUTO_TRADE_SECRET = os.getenv("AUTO_TRADE_SECRET", "change-me-now")
+AUTO_TRADE_TIER = os.getenv("AUTO_TRADE_TIER", "mastery_plus")
+AUTO_TRADE_NOTIONAL = float(os.getenv("AUTO_TRADE_NOTIONAL", "1.00"))
+AUTO_TRADE_MAX_ORDERS_PER_RUN = int(os.getenv("AUTO_TRADE_MAX_ORDERS_PER_RUN", "1"))
+AUTO_TRADE_BUY_ONLY = os.getenv("AUTO_TRADE_BUY_ONLY", "true").lower() == "true"
+AUTO_TRADE_ALLOWED_CONFIDENCE = os.getenv("AUTO_TRADE_ALLOWED_CONFIDENCE", "medium,high").lower().split(",")
+
 ADVANCED_ENGINE_CONFIG = {
     "name": "LionTrade Quantum Engine",
     "version": "4.0",
@@ -937,6 +947,185 @@ def place_broker_order_with_token(broker_token, symbol, side, qty=1):
     except Exception as e:
         return f"live_error_{str(e)[:80]}"
 
+
+def place_env_live_notional_order(symbol, side, notional=1.0, qty=None):
+    if not LIVE_TRADING_ENABLED:
+        return "live_error_owner_switch_off"
+
+    if not API_KEY or not SECRET_KEY:
+        return "live_error_missing_env_alpaca_keys"
+
+    if not is_live_tradeable_stock(symbol):
+        return "live_symbol_not_supported"
+
+    url = LIVE_URL.rstrip("/") + "/v2/orders"
+
+    headers = {
+        "APCA-API-KEY-ID": API_KEY,
+        "APCA-API-SECRET-KEY": SECRET_KEY,
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "symbol": symbol,
+        "side": side,
+        "type": "market",
+        "time_in_force": "day"
+    }
+
+    if side == "buy":
+        payload["notional"] = str(round(float(notional), 2))
+    else:
+        payload["qty"] = str(qty or 1)
+
+    try:
+        response = requests.post(url, json=payload, headers=headers, timeout=15)
+
+        if response.status_code in [200, 201]:
+            return f"live_{side}_submitted_notional_{payload.get('notional', payload.get('qty'))}"
+
+        try:
+            err = response.json()
+            message = err.get("message", str(err))
+        except Exception:
+            message = response.text
+
+        return f"live_error_{response.status_code}_{message[:100]}"
+
+    except Exception as e:
+        return f"live_error_{str(e)[:100]}"
+
+
+def record_live_trade(tier, symbol, side, price, order_status):
+    ORDERS.append({
+        "symbol": symbol,
+        "side": side,
+        "entry_price": price,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "mode": "live_auto",
+        "tier": tier,
+        "order_status": order_status
+    })
+
+
+def execute_auto_live_cycle():
+    tier = AUTO_TRADE_TIER
+    cfg = get_config(tier)
+
+    results = []
+    placed_count = 0
+
+    if not AUTO_TRADING_ENABLED:
+        return {
+            "ok": False,
+            "reason": "AUTO_TRADING_ENABLED=false",
+            "message": "Auto trading is OFF. Set AUTO_TRADING_ENABLED=true only when you are ready.",
+            "tier": tier,
+            "live_trading_enabled": LIVE_TRADING_ENABLED,
+            "results": []
+        }
+
+    if not LIVE_TRADING_ENABLED:
+        return {
+            "ok": False,
+            "reason": "LIVE_TRADING_ENABLED=false",
+            "message": "Live owner switch is OFF.",
+            "tier": tier,
+            "live_trading_enabled": LIVE_TRADING_ENABLED,
+            "results": []
+        }
+
+    if not cfg.get("live_trading_allowed"):
+        return {
+            "ok": False,
+            "reason": "tier_not_live_allowed",
+            "tier": tier,
+            "results": []
+        }
+
+    signals_data = get_signals_for_tier(tier)
+
+    for raw in signals_data["signals"]:
+        item = dict(raw)
+        symbol = item.get("symbol", "")
+        signal = item.get("signal", "hold")
+        confidence = str(item.get("confidence", "none")).lower()
+
+        if placed_count >= AUTO_TRADE_MAX_ORDERS_PER_RUN:
+            item["order_status"] = "skipped_max_orders_per_run_reached"
+            results.append(item)
+            continue
+
+        if item.get("bars_received", 0) == 0 or item.get("last_price", 0) == 0:
+            item["order_status"] = "skipped_no_data"
+            results.append(item)
+            continue
+
+        if not is_live_tradeable_stock(symbol):
+            item["order_status"] = "skipped_not_live_tradeable_stock"
+            results.append(item)
+            continue
+
+        if confidence not in AUTO_TRADE_ALLOWED_CONFIDENCE:
+            item["order_status"] = "skipped_confidence_filter"
+            results.append(item)
+            continue
+
+        if AUTO_TRADE_BUY_ONLY and signal != "buy":
+            item["order_status"] = "skipped_buy_only_mode"
+            results.append(item)
+            continue
+
+        if signal not in ["buy", "sell"]:
+            item["order_status"] = "skipped_signal_not_actionable"
+            results.append(item)
+            continue
+
+        if trades_today_count(tier, symbol) >= MAX_TRADES_PER_SYMBOL_PER_DAY:
+            item["order_status"] = "skipped_daily_limit"
+            results.append(item)
+            continue
+
+        seconds_ago = last_trade_seconds_ago(tier, symbol)
+        if seconds_ago is not None and seconds_ago < TRADE_COOLDOWN_SECONDS:
+            item["order_status"] = "skipped_cooldown"
+            results.append(item)
+            continue
+
+        if signal == "sell" and AUTO_TRADE_BUY_ONLY:
+            item["order_status"] = "skipped_sell_disabled"
+            results.append(item)
+            continue
+
+        status = place_env_live_notional_order(
+            symbol=symbol,
+            side=signal,
+            notional=AUTO_TRADE_NOTIONAL,
+            qty=1
+        )
+
+        item["order_status"] = status
+
+        if status.startswith("live_") and "submitted" in status:
+            record_live_trade(tier, symbol, signal, item.get("last_price", 0), status)
+            placed_count += 1
+
+        results.append(item)
+
+    return {
+        "ok": True,
+        "mode": "auto_live",
+        "tier": tier,
+        "auto_trading_enabled": AUTO_TRADING_ENABLED,
+        "live_trading_enabled": LIVE_TRADING_ENABLED,
+        "notional_per_buy": AUTO_TRADE_NOTIONAL,
+        "max_orders_per_run": AUTO_TRADE_MAX_ORDERS_PER_RUN,
+        "placed_count": placed_count,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "results": results
+    }
+
+
 def state_key(tier, symbol):
     return f"{tier}:{symbol}"
 
@@ -1801,7 +1990,52 @@ def dashboard():
             .broker-grid { grid-template-columns:1fr; }
             .broker-mode-grid { grid-template-columns:1fr; }
         }
-    </style>
+    
+        .key-box {
+            width: 100%;
+            min-height: 58px;
+            resize: vertical;
+            border-radius: 18px;
+            border: 1px solid rgba(255,255,255,.14);
+            background: rgba(2, 6, 23, .72);
+            color: var(--text);
+            padding: 14px 16px;
+            font-size: 16px;
+            line-height: 1.35;
+            outline: none;
+            -webkit-user-select: text !important;
+            user-select: text !important;
+            -webkit-touch-callout: default !important;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        }
+
+        .key-box:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 4px var(--glow);
+        }
+
+        .key-help {
+            font-size: 12px;
+            color: var(--muted);
+            margin-top: -4px;
+            margin-bottom: 8px;
+        }
+
+        .mini-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+
+        .mini-actions button {
+            padding: 9px 11px;
+            border-radius: 12px;
+            font-size: 12px;
+            box-shadow: none;
+        }
+
+</style>
 </head>
 <body>
 <div class="wrap">
@@ -1905,7 +2139,7 @@ def dashboard():
         <div class="topbar">
             <div>
                 <h2>Broker Connection</h2>
-                <p class="muted">Pick Paper or Live first. The secret is verified server-side and never displayed back.</p>
+                <p class="muted">Pick Paper or Live first. Use the large boxes below to paste Alpaca keys. Long-press inside a box if the Paste button is blocked.</p>
             </div>
             <div class="badge" id="brokerBadge">Broker: Not connected</div>
         </div>
@@ -1931,20 +2165,29 @@ def dashboard():
                 <input id="brokerMode" type="hidden" value="paper">
 
                 <div class="broker-form">
-                    <div class="input-row">
-                        <input id="brokerKey" class="copyable" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Alpaca API Key">
-                        <button type="button" class="paste-btn" onclick="pasteInto('brokerKey')">Paste</button>
+                    <label class="label">Alpaca API Key</label>
+                    <div class="mini-actions">
+                        <button type="button" class="paste-btn" onclick="pasteInto('brokerKey')">Paste Key</button>
+                        <button type="button" class="dark" onclick="clearInput('brokerKey')">Clear</button>
                     </div>
-                    <div class="input-row">
-                        <input id="brokerSecret" class="copyable" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Alpaca Secret Key">
-                        <button type="button" class="paste-btn" onclick="pasteInto('brokerSecret')">Paste</button>
+                    <textarea id="brokerKey" class="key-box copyable" rows="2" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" inputmode="text" placeholder="Paste Alpaca API Key here"></textarea>
+                    <div class="key-help">Tip: tap inside the box, hold, then tap Paste. The Paste button also works if your browser allows clipboard access.</div>
+
+                    <label class="label">Alpaca Secret Key</label>
+                    <div class="mini-actions">
+                        <button type="button" class="paste-btn" onclick="pasteInto('brokerSecret')">Paste Secret</button>
+                        <button type="button" class="dark" onclick="toggleSecret()">Show / Hide</button>
+                        <button type="button" class="dark" onclick="clearInput('brokerSecret')">Clear</button>
                     </div>
+                    <textarea id="brokerSecret" class="key-box copyable" rows="3" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" inputmode="text" placeholder="Paste Alpaca Secret Key here"></textarea>
+                    <div class="key-help">Your secret is sent to the server to verify/connect. It is not displayed back after connection.</div>
+
                     <button onclick="connectBroker()" class="green">Connect Broker</button>
                     <button onclick="disconnectBroker()" class="dark">Disconnect</button>
                 </div>
 
                 <div class="connection-meter"><span id="connectionMeter"></span></div>
-                <p class="click-hint">Live account can connect here. To place real orders, set LIVE_TRADING_ENABLED=true in Render Environment.</p>
+                <p class="click-hint">Live account can connect here. Manual live orders need LIVE_TRADING_ENABLED=true. Offline auto-trading also needs AUTO_TRADING_ENABLED=true and a Cron Job.</p>
             </div>
 
             <div class="card real-app-card" id="brokerStatusCard">
@@ -2149,10 +2392,32 @@ async function pasteInto(id) {
 
     try {
         const text = await navigator.clipboard.readText();
-        input.value = text.trim();
+        input.value = (text || "").trim();
         input.dispatchEvent(new Event("input", { bubbles: true }));
     } catch {
-        alert("Paste permission was blocked. Tap inside the box and use normal paste.");
+        alert("Paste permission was blocked by the browser. Tap inside the box, hold your finger, then tap Paste.");
+    }
+}
+
+function clearInput(id) {
+    const input = document.getElementById(id);
+    if (!input) return;
+    input.value = "";
+    input.focus();
+}
+
+function toggleSecret() {
+    const box = document.getElementById("brokerSecret");
+    if (!box) return;
+
+    if (box.dataset.hidden === "true") {
+        box.style.webkitTextSecurity = "none";
+        box.style.textSecurity = "none";
+        box.dataset.hidden = "false";
+    } else {
+        box.style.webkitTextSecurity = "disc";
+        box.style.textSecurity = "disc";
+        box.dataset.hidden = "true";
     }
 }
 
@@ -2677,8 +2942,8 @@ async function loadBrokerStatus() {
 }
 
 async function connectBroker() {
-    const apiKey = document.getElementById("brokerKey").value.trim();
-    const secretKey = document.getElementById("brokerSecret").value.trim();
+    const apiKey = document.getElementById("brokerKey").value.replace(/\s+/g, "").trim();
+    const secretKey = document.getElementById("brokerSecret").value.replace(/\s+/g, "").trim();
     const mode = document.getElementById("brokerMode").value;
 
     setConnectionMeter(35);
@@ -2857,6 +3122,43 @@ def clear_cache():
         "ok": True,
         "message": "Cache cleared."
     })
+
+
+
+@app.route("/auto-status")
+def auto_status():
+    return jsonify({
+        "auto_trading_enabled": AUTO_TRADING_ENABLED,
+        "live_trading_enabled": LIVE_TRADING_ENABLED,
+        "tier": AUTO_TRADE_TIER,
+        "notional_per_buy": AUTO_TRADE_NOTIONAL,
+        "max_orders_per_run": AUTO_TRADE_MAX_ORDERS_PER_RUN,
+        "buy_only": AUTO_TRADE_BUY_ONLY,
+        "allowed_confidence": AUTO_TRADE_ALLOWED_CONFIDENCE,
+        "secret_configured": bool(AUTO_TRADE_SECRET and AUTO_TRADE_SECRET != "change-me-now"),
+        "api_key_loaded": bool(API_KEY),
+        "secret_key_loaded": bool(SECRET_KEY),
+        "message": "Use /auto-trade-live?secret=YOUR_SECRET from a Render Cron Job to run offline auto trading."
+    })
+
+
+@app.route("/auto-trade-live")
+def auto_trade_live():
+    secret = request.args.get("secret", "") or request.headers.get("X-Auto-Trade-Secret", "")
+
+    if not AUTO_TRADE_SECRET or AUTO_TRADE_SECRET == "change-me-now":
+        return jsonify({
+            "ok": False,
+            "reason": "AUTO_TRADE_SECRET_not_configured"
+        }), 403
+
+    if secret != AUTO_TRADE_SECRET:
+        return jsonify({
+            "ok": False,
+            "reason": "invalid_auto_trade_secret"
+        }), 403
+
+    return jsonify(execute_auto_live_cycle())
 
 
 @app.route("/status")
