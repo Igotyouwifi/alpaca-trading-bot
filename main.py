@@ -556,21 +556,85 @@ def is_live_tradeable_stock(symbol):
     return True
 
 
+
 def place_live_order(symbol, side, qty=1):
+    # Old environment-variable fallback. Most users should use connected broker token below.
     client = get_alpaca_client("live")
 
     if client is None:
-        return "live_api_unavailable"
+        return "live_api_unavailable_no_env_keys"
 
     if not is_live_tradeable_stock(symbol):
         return "live_symbol_not_supported"
 
     try:
-        client.submit_order(symbol=symbol, qty=qty, side=side, type="market", time_in_force="gtc")
+        client.submit_order(
+            symbol=symbol,
+            qty=qty,
+            side=side,
+            type="market",
+            time_in_force="gtc"
+        )
         return f"live_{side}_submitted"
     except Exception as e:
         return f"live_error_{str(e)[:80]}"
 
+
+def place_broker_order_with_token(broker_token, symbol, side, qty=1):
+    broker = BROKER_CONNECTIONS.get(broker_token)
+
+    if not broker:
+        return "live_error_no_connected_broker"
+
+    mode = broker.get("mode", "paper")
+
+    if mode != "live":
+        return "live_error_connected_broker_is_not_live"
+
+    if not LIVE_TRADING_ENABLED:
+        return "live_trading_disabled_in_render_env"
+
+    if not is_live_tradeable_stock(symbol):
+        return "live_symbol_not_supported"
+
+    api_key = broker.get("api_key", "")
+    secret_key = broker.get("secret_key", "")
+
+    if not api_key or not secret_key:
+        return "live_error_missing_broker_credentials"
+
+    url = LIVE_URL.rstrip("/") + "/v2/orders"
+
+    headers = {
+        "APCA-API-KEY-ID": api_key,
+        "APCA-API-SECRET-KEY": secret_key,
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "symbol": symbol,
+        "qty": str(qty),
+        "side": side,
+        "type": "market",
+        "time_in_force": "day"
+    }
+
+    try:
+        response = requests.post(url, json=payload, headers=headers, timeout=12)
+
+        if response.status_code in [200, 201]:
+            return f"live_{side}_submitted"
+
+        try:
+            err = response.json()
+            message = err.get("message", str(err))
+        except Exception:
+            message = response.text
+
+        return f"live_error_{response.status_code}_{message[:80]}"
+
+    except Exception as e:
+        return f"live_error_{str(e)[:80]}"
 
 def state_key(tier, symbol):
     return f"{tier}:{symbol}"
@@ -648,7 +712,7 @@ def record_paper_trade(tier, symbol, side, price):
     })
 
 
-def execute_trade_cycle(tier, mode="paper"):
+def execute_trade_cycle(tier, mode="paper", broker_token=""):
     cfg = get_config(tier)
     signals_data = get_signals_for_tier(tier)
     results = []
@@ -708,15 +772,21 @@ def execute_trade_cycle(tier, mode="paper"):
 
         elif mode == "live":
             if not cfg["live_trading_allowed"]:
-                item["order_status"] = "live_trading_not_allowed"
+                item["order_status"] = "live_trading_not_allowed_this_tier"
+            elif not broker_token:
+                item["order_status"] = "live_error_connect_live_broker_first"
+            elif broker_token not in BROKER_CONNECTIONS:
+                item["order_status"] = "live_error_broker_session_expired_reconnect"
+            elif BROKER_CONNECTIONS[broker_token].get("mode") != "live":
+                item["order_status"] = "live_error_choose_live_account_not_paper"
             elif not LIVE_TRADING_ENABLED:
-                item["order_status"] = "live_trading_disabled_in_environment"
+                item["order_status"] = "live_trading_disabled_in_render_env"
             elif trade_side == "sell" and current_qty <= 0:
                 item["order_status"] = "live_sell_blocked_no_position"
             elif trade_side == "buy" and current_qty > 0:
                 item["order_status"] = "live_buy_blocked_already_holding"
             else:
-                item["order_status"] = place_live_order(symbol, trade_side, qty=1)
+                item["order_status"] = place_broker_order_with_token(broker_token, symbol, trade_side, qty=1)
 
         else:
             item["order_status"] = "invalid_mode"
@@ -726,6 +796,8 @@ def execute_trade_cycle(tier, mode="paper"):
     return {
         "tier": tier,
         "mode": mode,
+        "broker_connected": bool(broker_token and broker_token in BROKER_CONNECTIONS),
+        "live_trading_enabled": LIVE_TRADING_ENABLED,
         "safety_rules": {
             "short_selling_allowed": ALLOW_SHORT_SELLING,
             "cooldown_seconds": TRADE_COOLDOWN_SECONDS,
@@ -1780,7 +1852,12 @@ async function loadTier(tier) {
     let actionHTML = `<button class="dark" onclick="loadTier(currentTier)">Refresh</button>`;
 
     if (t.paper_trading) actionHTML += `<button onclick="runBot('paper')" class="green">Run Safe Paper Bot</button>`;
-    if (t.live_trading_allowed) actionHTML += `<button onclick="runBot('live')" class="red">Try Live Bot</button>`;
+
+    if (t.live_trading_allowed) {
+        actionHTML += `<button onclick="runBot('live')" class="red">Run Live Bot</button>`;
+    } else {
+        actionHTML += `<button onclick="showLiveLocked()" class="dark">Live Bot Locked</button>`;
+    }
 
     document.getElementById("actions").innerHTML = actionHTML;
 
@@ -1842,14 +1919,41 @@ function renderCards(items) {
     `).join("");
 }
 
+
+
+function showLiveLocked() {
+    document.getElementById("details").innerHTML = `
+        <div class="notice">
+            <h3>Live Trading Locked</h3>
+            <p>Live trading is only allowed on Mastery Plus. Unlock with MASTER-PAID, choose Mastery Plus, connect a Live Account, and set LIVE_TRADING_ENABLED=true in Render.</p>
+        </div>
+    ` + document.getElementById("details").innerHTML;
+}
+
 async function runBot(mode) {
     try {
-        const result = await getJSON(`/trade?tier=${currentTier}&mode=${mode}`);
+        let url = `/trade?tier=${currentTier}&mode=${mode}`;
+
+        if (mode === "live") {
+            if (!brokerToken) {
+                document.getElementById("details").innerHTML = `
+                    <div class="notice">
+                        <h3>Connect Live Broker First</h3>
+                        <p>Choose <b>Live Account</b> in Broker Connection, enter your live Alpaca key/secret, then click Connect Broker.</p>
+                    </div>
+                ` + document.getElementById("details").innerHTML;
+                return;
+            }
+
+            url += `&broker_token=${encodeURIComponent(brokerToken)}`;
+        }
+
+        const result = await getJSON(url);
         document.getElementById("details").innerHTML = `
             <div class="notice">
                 <h3>Bot run completed</h3>
-                <p>Mode: ${result.mode}. Short selling: ${result.safety_rules.short_selling_allowed}. Max trades/day: ${result.safety_rules.max_trades_per_symbol_per_day}.</p>
-                <p>Sell signals without positions are now warnings only.</p>
+                <p>Mode: ${result.mode}. Broker connected: ${result.broker_connected}. Live enabled: ${result.live_trading_enabled}.</p>
+                <p>Short selling: ${result.safety_rules.short_selling_allowed}. Max trades/day: ${result.safety_rules.max_trades_per_symbol_per_day}.</p>
             </div>
         ` + document.getElementById("details").innerHTML;
         await loadTier(currentTier);
@@ -2236,6 +2340,13 @@ def status():
             "sell_requires_position": True,
             "repeat_buy_blocked": True
         },
+        "live_trade_checklist": [
+            "Unlock Mastery Plus",
+            "Choose Live Account in Broker Connection",
+            "Connect live Alpaca API key/secret",
+            "Set LIVE_TRADING_ENABLED=true in Render environment",
+            "Click Run Live Bot"
+        ],
         "routes": [
             "/",
             "/tiers",
@@ -2289,11 +2400,12 @@ def trade():
     tier = request.args.get("tier", "starter")
     mode = request.args.get("mode", "paper")
     key = request.args.get("key", "")
+    broker_token = request.args.get("broker_token", "")
 
     if not can_access_tier(tier, key):
         return locked_response(tier)
 
-    return jsonify(execute_trade_cycle(tier, mode))
+    return jsonify(execute_trade_cycle(tier, mode, broker_token))
 
 
 @app.route("/portfolio")
