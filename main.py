@@ -26,6 +26,19 @@ LIVE_URL = "https://api.alpaca.markets"
 # Keep this false until everything is tested.
 LIVE_TRADING_ENABLED = os.getenv("LIVE_TRADING_ENABLED", "false").lower() == "true"
 
+ADVANCED_ENGINE_CONFIG = {
+    "name": "LionTrade Quantum Engine",
+    "version": "4.0",
+    "mode": "multi_factor_risk_managed",
+    "max_confidence_without_volume": "medium",
+    "risk_per_trade_pct": 1.0,
+    "max_position_pct": 10.0,
+    "atr_stop_multiplier": 1.8,
+    "atr_take_profit_multiplier": 2.8,
+    "market_regime_symbol": "SPY",
+    "live_order_qty": 1
+}
+
 # Internal demo/paper state. This does NOT place Alpaca paper orders.
 ORDERS = []
 POSITIONS = {}
@@ -298,6 +311,142 @@ def compute_rsi(close, period=14):
     return rsi.fillna(50)
 
 
+
+def safe_float(value, default=0.0):
+    try:
+        value = float(value)
+        if np.isfinite(value):
+            return value
+    except Exception:
+        pass
+    return default
+
+
+def compute_atr(df, period=14):
+    try:
+        high = df["high"].astype(float)
+        low = df["low"].astype(float)
+        close = df["close"].astype(float)
+        prev_close = close.shift(1)
+
+        tr = pd.concat([
+            (high - low).abs(),
+            (high - prev_close).abs(),
+            (low - prev_close).abs()
+        ], axis=1).max(axis=1)
+
+        atr = tr.rolling(period).mean().fillna(method="bfill").fillna(0)
+        return atr
+    except Exception:
+        return pd.Series([0] * len(df))
+
+
+def calculate_market_regime():
+    df = get_data(ADVANCED_ENGINE_CONFIG["market_regime_symbol"], period="1mo", interval="1d")
+
+    if df.empty or len(df) < 20:
+        return {
+            "regime": "unknown",
+            "risk_mode": "cautious",
+            "reason": "market_regime_data_unavailable"
+        }
+
+    close = df["close"].dropna()
+    ema10 = close.ewm(span=10, adjust=False).mean()
+    ema20 = close.ewm(span=20, adjust=False).mean()
+
+    last = safe_float(close.iloc[-1])
+    e10 = safe_float(ema10.iloc[-1])
+    e20 = safe_float(ema20.iloc[-1])
+    vol = safe_float(close.pct_change().dropna().tail(10).std())
+
+    if last > e10 > e20 and vol < 0.025:
+        return {
+            "regime": "bullish",
+            "risk_mode": "normal",
+            "reason": "spy_above_ema10_ema20"
+        }
+
+    if last < e10 < e20:
+        return {
+            "regime": "bearish",
+            "risk_mode": "defensive",
+            "reason": "spy_below_ema10_ema20"
+        }
+
+    if vol >= 0.025:
+        return {
+            "regime": "volatile",
+            "risk_mode": "reduced",
+            "reason": "market_volatility_elevated"
+        }
+
+    return {
+        "regime": "mixed",
+        "risk_mode": "cautious",
+        "reason": "market_trend_mixed"
+    }
+
+
+def build_risk_plan(symbol, last_price, atr_value, score, confidence, cfg):
+    last_price = safe_float(last_price)
+    atr_value = safe_float(atr_value)
+
+    if last_price <= 0:
+        return {
+            "risk_level": "unknown",
+            "position_size_pct": 0,
+            "stop_loss": 0,
+            "take_profit": 0,
+            "risk_note": "no_valid_price"
+        }
+
+    if atr_value <= 0:
+        atr_value = max(last_price * 0.015, 0.01)
+
+    volatility_pct = (atr_value / last_price) * 100
+
+    if volatility_pct >= 5:
+        risk_level = "high"
+        position_size_pct = 2
+    elif volatility_pct >= 3:
+        risk_level = "medium"
+        position_size_pct = 5
+    else:
+        risk_level = "controlled"
+        position_size_pct = 8
+
+    if confidence == "high" and score >= cfg["min_score_buy"]:
+        position_size_pct = min(position_size_pct + 2, ADVANCED_ENGINE_CONFIG["max_position_pct"])
+
+    if confidence == "low":
+        position_size_pct = max(position_size_pct - 3, 1)
+
+    stop_loss = last_price - (atr_value * ADVANCED_ENGINE_CONFIG["atr_stop_multiplier"])
+    take_profit = last_price + (atr_value * ADVANCED_ENGINE_CONFIG["atr_take_profit_multiplier"])
+
+    return {
+        "risk_level": risk_level,
+        "position_size_pct": round(position_size_pct, 2),
+        "stop_loss": round(max(stop_loss, 0), 2),
+        "take_profit": round(take_profit, 2),
+        "atr": round(atr_value, 4),
+        "volatility_pct": round(volatility_pct, 2),
+        "risk_note": "atr_based_dynamic_risk_plan"
+    }
+
+
+def ai_quality_label(score, confidence, market_regime):
+    if confidence == "high" and score >= 85 and market_regime in ["bullish", "mixed"]:
+        return "A+ setup"
+    if confidence in ["high", "medium"] and score >= 70:
+        return "strong setup"
+    if score <= 30:
+        return "avoid / bearish"
+    if confidence == "low":
+        return "wait for confirmation"
+    return "neutral setup"
+
 def no_data_signal(symbol, reason="no_data_available_hold_only"):
     return {
         "symbol": symbol,
@@ -312,6 +461,7 @@ def no_data_signal(symbol, reason="no_data_available_hold_only"):
     }
 
 
+
 def analyze_symbol(symbol):
     df = get_data(symbol)
 
@@ -323,7 +473,7 @@ def analyze_symbol(symbol):
     if close.empty:
         return no_data_signal(symbol)
 
-    last_price = float(close.iloc[-1])
+    last_price = safe_float(close.iloc[-1])
 
     if not np.isfinite(last_price) or last_price <= 0:
         return no_data_signal(symbol, "no_valid_price_hold_only")
@@ -332,85 +482,163 @@ def analyze_symbol(symbol):
 
     ma20 = close.rolling(20).mean()
     ma50 = close.rolling(50).mean()
+    ma100 = close.rolling(100).mean() if len(close) >= 100 else ma50
 
+    ema8 = close.ewm(span=8, adjust=False).mean()
     ema12 = close.ewm(span=12, adjust=False).mean()
+    ema21 = close.ewm(span=21, adjust=False).mean()
     ema26 = close.ewm(span=26, adjust=False).mean()
 
     macd = ema12 - ema26
     macd_signal = macd.ewm(span=9, adjust=False).mean()
 
     rsi = compute_rsi(close)
+    atr_series = compute_atr(df)
 
-    last_ma20 = float(ma20.iloc[-1])
-    last_ma50 = float(ma50.iloc[-1])
-    last_macd = float(macd.iloc[-1])
-    last_macd_signal = float(macd_signal.iloc[-1])
-    last_rsi = float(rsi.iloc[-1])
+    last_ma20 = safe_float(ma20.iloc[-1])
+    last_ma50 = safe_float(ma50.iloc[-1])
+    last_ma100 = safe_float(ma100.iloc[-1])
+    last_ema8 = safe_float(ema8.iloc[-1])
+    last_ema21 = safe_float(ema21.iloc[-1])
+    last_macd = safe_float(macd.iloc[-1])
+    last_macd_signal = safe_float(macd_signal.iloc[-1])
+    last_rsi = safe_float(rsi.iloc[-1], 50)
+    last_atr = safe_float(atr_series.iloc[-1])
 
-    avg_volume = float(volume.tail(20).mean()) if len(volume) >= 20 else float(volume.mean())
-    last_volume = float(volume.iloc[-1]) if len(volume) else 0
+    avg_volume = safe_float(volume.tail(20).mean()) if len(volume) >= 20 else safe_float(volume.mean())
+    last_volume = safe_float(volume.iloc[-1]) if len(volume) else 0
 
-    volatility = float(close.pct_change().dropna().tail(20).std()) if len(close) >= 20 else 0.0
+    recent_returns = close.pct_change().dropna()
+    volatility = safe_float(recent_returns.tail(20).std()) if len(recent_returns) >= 20 else 0.0
+    momentum_5 = safe_float((close.iloc[-1] / close.iloc[-6] - 1) * 100) if len(close) > 6 else 0
+    momentum_20 = safe_float((close.iloc[-1] / close.iloc[-21] - 1) * 100) if len(close) > 21 else 0
 
     score = 50
     reasons = []
+    advanced_factors = {}
 
     if last_price > last_ma20 > last_ma50:
-        score += 20
+        score += 18
         reasons.append("bullish_trend")
+        advanced_factors["trend"] = "bullish"
+    elif last_price < last_ma20 < last_ma50:
+        score -= 22
+        reasons.append("bearish_trend")
+        advanced_factors["trend"] = "bearish"
     else:
-        score -= 20
-        reasons.append("bearish_or_weak_trend")
+        score -= 5
+        reasons.append("mixed_trend")
+        advanced_factors["trend"] = "mixed"
 
-    if last_rsi < 35:
-        score += 10
+    if last_ema8 > last_ema21:
+        score += 8
+        reasons.append("short_term_momentum_positive")
+        advanced_factors["ema_momentum"] = "positive"
+    else:
+        score -= 8
+        reasons.append("short_term_momentum_negative")
+        advanced_factors["ema_momentum"] = "negative"
+
+    if last_rsi < 30:
+        score += 8
+        reasons.append("deep_oversold_rsi")
+        advanced_factors["rsi_state"] = "deep_oversold"
+    elif last_rsi < 40:
+        score += 5
         reasons.append("oversold_rsi")
+        advanced_factors["rsi_state"] = "oversold"
+    elif last_rsi > 78:
+        score -= 12
+        reasons.append("extreme_overbought_rsi")
+        advanced_factors["rsi_state"] = "extreme_overbought"
     elif last_rsi > 70:
-        score -= 10
+        score -= 7
         reasons.append("overbought_rsi")
+        advanced_factors["rsi_state"] = "overbought"
     else:
         reasons.append("neutral_rsi")
+        advanced_factors["rsi_state"] = "neutral"
 
     if last_macd > last_macd_signal:
-        score += 15
+        score += 12
         reasons.append("bullish_macd")
+        advanced_factors["macd"] = "bullish"
     else:
-        score -= 15
+        score -= 12
         reasons.append("bearish_macd")
+        advanced_factors["macd"] = "bearish"
 
-    if avg_volume > 0 and last_volume >= avg_volume * 0.9:
+    if avg_volume > 0 and last_volume >= avg_volume * 1.2:
         score += 10
+        reasons.append("strong_volume_confirmation")
+        advanced_factors["volume"] = "strong"
+    elif avg_volume > 0 and last_volume >= avg_volume * 0.85:
+        score += 4
         reasons.append("volume_confirmed")
+        advanced_factors["volume"] = "confirmed"
     else:
+        score -= 6
         reasons.append("low_volume")
+        advanced_factors["volume"] = "low"
 
-    if volatility > 0.03:
-        score -= 30
-        reasons.append("high_volatility_risk")
+    if momentum_5 > 1 and momentum_20 > 2:
+        score += 10
+        reasons.append("multi_period_momentum_positive")
+        advanced_factors["momentum"] = "positive"
+    elif momentum_5 < -1 and momentum_20 < -2:
+        score -= 10
+        reasons.append("multi_period_momentum_negative")
+        advanced_factors["momentum"] = "negative"
     else:
+        reasons.append("momentum_neutral")
+        advanced_factors["momentum"] = "neutral"
+
+    if volatility > 0.04:
+        score -= 25
+        reasons.append("high_volatility_risk")
+        advanced_factors["volatility"] = "high"
+    elif volatility > 0.025:
+        score -= 12
+        reasons.append("medium_volatility_risk")
+        advanced_factors["volatility"] = "medium"
+    else:
+        score += 3
         reasons.append("stable_volatility")
+        advanced_factors["volatility"] = "stable"
 
     score = max(0, min(100, int(score)))
 
-    if score >= 80 or score <= 20:
+    if score >= 82 or score <= 18:
         confidence = "high"
-    elif score >= 60 or score <= 40:
+    elif score >= 65 or score <= 35:
         confidence = "medium"
     else:
         confidence = "low"
 
+    if advanced_factors.get("volume") == "low" and confidence == "high":
+        confidence = "medium"
+
+    market = calculate_market_regime()
+    risk_plan = build_risk_plan(symbol, last_price, last_atr, score, confidence, get_config("starter"))
+
     return {
         "symbol": symbol,
-        "asset_type": "crypto" if symbol.endswith("-USD") else "stock",
         "signal": "hold",
         "score": score,
         "confidence": confidence,
         "last_price": round(last_price, 2),
         "reasons": reasons,
         "bars_received": int(len(df)),
-        "order_status": "not_executed"
+        "order_status": "not_executed",
+        "engine": ADVANCED_ENGINE_CONFIG["name"],
+        "engine_version": ADVANCED_ENGINE_CONFIG["version"],
+        "advanced_factors": advanced_factors,
+        "market_regime": market,
+        "momentum_5d_pct": round(momentum_5, 2),
+        "momentum_20d_pct": round(momentum_20, 2),
+        "risk_plan": risk_plan,
+        "ai_quality": ai_quality_label(score, confidence, market.get("regime", "unknown"))
     }
-
 
 def signal_for_score(score, cfg):
     if score >= cfg["min_score_buy"]:
@@ -439,6 +667,20 @@ def get_signals_for_tier(tier):
             result["order_status"] = "not_executed"
         else:
             result["signal"] = signal_for_score(result["score"], cfg)
+            if result.get("last_price", 0) > 0 and "risk_plan" in result:
+                result["risk_plan"] = build_risk_plan(
+                    result["symbol"],
+                    result["last_price"],
+                    result["risk_plan"].get("atr", 0),
+                    result["score"],
+                    result["confidence"],
+                    cfg
+                )
+                result["ai_quality"] = ai_quality_label(
+                    result["score"],
+                    result["confidence"],
+                    result.get("market_regime", {}).get("regime", "unknown")
+                )
 
         signals.append(result)
 
@@ -454,6 +696,8 @@ def get_signals_for_tier(tier):
         "alert_channels": cfg["alert_channels"],
         "login_options": cfg["login_options"],
         "broker_options": cfg["broker_options"],
+        "engine": ADVANCED_ENGINE_CONFIG,
+        "market_regime": calculate_market_regime(),
         "signals": signals
     }
 
@@ -901,11 +1145,12 @@ def dashboard():
 <!DOCTYPE html>
 <html>
 <head>
-    <title>AI Stock Agent Dashboard</title>
+    <meta charset="UTF-8">
+    <title>LionTrade AI</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#0b1020">
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-title" content="AI Stock Agent">
+    <meta name="apple-mobile-web-app-title" content="LionTrade AI">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root {
@@ -962,21 +1207,25 @@ def dashboard():
             gap:12px;
         }
         .brand-logo {
-            width:54px;
-            height:54px;
-            border-radius:18px;
+            width:62px;
+            height:62px;
+            border-radius:20px;
             display:flex;
             align-items:center;
             justify-content:center;
-            font-size:23px;
-            font-weight:1000;
-            letter-spacing:-1px;
             background:
-                linear-gradient(135deg, var(--accent), var(--accent2)),
-                radial-gradient(circle at 25% 20%, rgba(255,255,255,.55), transparent 35%);
-            box-shadow: 0 18px 42px var(--glow), inset 0 1px 0 rgba(255,255,255,.22);
+                linear-gradient(135deg, rgba(250,204,21,.20), rgba(245,158,11,.12)),
+                radial-gradient(circle at 35% 20%, rgba(255,255,255,.35), transparent 38%);
+            box-shadow: 0 18px 42px rgba(245,158,11,.28), inset 0 1px 0 rgba(255,255,255,.22);
             color:white;
             user-select:none;
+            border:1px solid rgba(250,204,21,.35);
+        }
+        .brand-logo svg {
+            width:50px;
+            height:50px;
+            display:block;
+            filter: drop-shadow(0 8px 14px rgba(0,0,0,.35));
         }
         .brand-name {
             display:flex;
@@ -1502,13 +1751,30 @@ def dashboard():
     <div class="app-shell">
         <div class="brand-row">
             <div class="brand">
-                <div class="brand-logo">AI</div>
+                <div class="brand-logo lion-logo" aria-label="LionTrade AI logo">
+                    <svg viewBox="0 0 64 64" role="img" aria-hidden="true">
+                        <defs>
+                            <linearGradient id="lionGold" x1="0" x2="1" y1="0" y2="1">
+                                <stop offset="0%" stop-color="#facc15"/>
+                                <stop offset="55%" stop-color="#f59e0b"/>
+                                <stop offset="100%" stop-color="#7c2d12"/>
+                            </linearGradient>
+                        </defs>
+                        <path d="M32 4 L39 12 L50 10 L51 22 L60 30 L52 39 L52 52 L40 51 L32 60 L24 51 L12 52 L12 39 L4 30 L13 22 L14 10 L25 12 Z" fill="url(#lionGold)"/>
+                        <path d="M20 23 L29 18 L32 22 L35 18 L44 23 L43 39 L36 47 L28 47 L21 39 Z" fill="#111827" opacity=".92"/>
+                        <path d="M24 30 H29 M35 30 H40" stroke="#facc15" stroke-width="3" stroke-linecap="round"/>
+                        <path d="M29 39 H35 L32 43 Z" fill="#facc15"/>
+                        <path d="M22 20 L14 15 M42 20 L50 15 M18 44 L10 49 M46 44 L54 49" stroke="#111827" stroke-width="3" stroke-linecap="round" opacity=".9"/>
+                        <circle cx="24" cy="30" r="1.8" fill="#38bdf8"/>
+                        <circle cx="40" cy="30" r="1.8" fill="#38bdf8"/>
+                    </svg>
+                </div>
                 <div class="brand-name">
-                    <b>AI Stock Agent</b>
-                    <span>Premium Trading Dashboard</span>
+                    <b>LionTrade AI</b>
+                    <span>Robotic Lion Trading Bot</span>
                 </div>
             </div>
-            <div class="app-status-pill">â Service Live</div>
+            <div class="app-status-pill">LIVE â¢ Service Online</div>
         </div>
     <section class="warning-top">
         <div>
@@ -1521,10 +1787,10 @@ def dashboard():
         <div class="topbar">
             <div>
                 <div class="hero-meta">
-                    <div class="badge">â AI Stock Agent Running</div>
+                    <div class="badge">LIVE â¢ LionTrade AI Running</div>
                     <div class="badge theme-badge" id="themeBadge">Starter Theme Active</div>
                 </div>
-                <h1>AI Stock Agent Dashboard</h1>
+                <h1>LionTrade AI Dashboard</h1>
                 <p id="heroCopy">Signals, crypto, paper trading, reports, portfolio charts, and tier-based themes.</p>
                 <div class="tier-glance">
                     <div class="mini-stat"><span class="k">Active Tier</span><span class="v" id="miniTier">Starter</span></div>
@@ -1593,15 +1859,15 @@ def dashboard():
 
                 <div class="broker-mode-grid">
                     <button type="button" id="modePaper" class="mode-card active" onclick="selectBrokerMode('paper')">
-                        <span class="mode-icon">ð§ª</span>
+                        <span class="mode-icon">P</span>
                         <span class="mode-title">Paper Account</span>
                         <span class="mode-sub">Safe testing. No real money. Best for trials and demos.</span>
                     </button>
 
                     <button type="button" id="modeLive" class="mode-card live-mode" onclick="selectBrokerMode('live')">
-                        <span class="mode-icon">â¡</span>
+                        <span class="mode-icon">L</span>
                         <span class="mode-title">Live Account</span>
-                        <span class="mode-sub">Real brokerage connection. Orders stay blocked unless live trading is enabled.</span>
+                        <span class="mode-sub">Real brokerage connection. Real orders require owner switch ON.</span>
                     </button>
                 </div>
 
@@ -1621,11 +1887,15 @@ def dashboard():
                 </div>
 
                 <div class="connection-meter"><span id="connectionMeter"></span></div>
-                <p class="click-hint">Paper first. Live can connect, but real live orders stay blocked while LIVE_TRADING_ENABLED=false.</p>
+                <p class="click-hint">Live account can connect here. To place real orders, set LIVE_TRADING_ENABLED=true in Render Environment.</p>
             </div>
 
             <div class="card real-app-card" id="brokerStatusCard">
                 <h3>Connection Status</h3>
+                <div class="code-box">
+                    <span>Owner Switch</span>
+                    <b id="ownerSwitchText">LIVE_TRADING_ENABLED</b>
+                </div>
                 <div class="rows" id="brokerStatusRows">
                     <div class="row"><span>Status</span><b>Not connected</b></div>
                 </div>
@@ -1704,7 +1974,7 @@ const TIER_THEMES = {
     starter: {
         label: "Starter Theme",
         accentName: "Neon Blue",
-        emblem: "â¡",
+        emblem: "LIVE",
         access: "Starter / Trial",
         heroCopy: "Start clean with a sharp blue launchpad theme built for previews and first-time users.",
         chips: ["Starter vibe", "Blue launch", "Preview access"],
@@ -1723,7 +1993,7 @@ const TIER_THEMES = {
     pro: {
         label: "Pro Theme",
         accentName: "Purple Velocity",
-        emblem: "â",
+        emblem: "PRO",
         access: "Pro Access",
         heroCopy: "Pro unlocks a slick purple velocity style for a smarter, sharper trading experience.",
         chips: ["Pro style", "Purple velocity", "Faster feel"],
@@ -1742,7 +2012,7 @@ const TIER_THEMES = {
     elite: {
         label: "Elite Theme",
         accentName: "Emerald Prestige",
-        emblem: "â¬¢",
+        emblem: "ELITE",
         access: "Elite Access",
         heroCopy: "Elite gets an emerald prestige skin that feels more exclusive and polished.",
         chips: ["Elite prestige", "Emerald glow", "Premium engine"],
@@ -1761,7 +2031,7 @@ const TIER_THEMES = {
     ultra: {
         label: "Ultra Theme",
         accentName: "Crimson Heat",
-        emblem: "â¬£",
+        emblem: "ULTRA",
         access: "Ultra Access",
         heroCopy: "Ultra turns the dashboard into a more aggressive crimson heat theme for power users.",
         chips: ["Ultra fire", "Automation ready", "Chart heavy"],
@@ -1780,7 +2050,7 @@ const TIER_THEMES = {
     mastery_plus: {
         label: "Mastery Plus Theme",
         accentName: "Black Gold Luxury",
-        emblem: "ð",
+        emblem: "MASTER",
         access: "Mastery Plus",
         heroCopy: "Mastery Plus unlocks a black-and-gold luxury theme so the highest upgrade feels truly premium.",
         chips: ["Luxury mode", "Global scanner", "Top tier aura"],
@@ -2041,6 +2311,16 @@ async function loadTier(tier) {
                 <h3>Features</h3>
                 <ul>${t.features.map(f => `<li>${f}</li>`).join("")}</ul>
             </div>
+            <div class="card real-app-card">
+                <h3>Advanced Engine</h3>
+                <div class="rows">
+                    <div class="row"><span>Model</span><b>${data.engine?.name || "LionTrade Quantum Engine"}</b></div>
+                    <div class="row"><span>Version</span><b>${data.engine?.version || "4.0"}</b></div>
+                    <div class="row"><span>Market Regime</span><b>${data.market_regime?.regime || "unknown"}</b></div>
+                    <div class="row"><span>Risk Mode</span><b>${data.market_regime?.risk_mode || "cautious"}</b></div>
+                </div>
+                <p class="muted">Uses trend, EMA momentum, MACD, RSI, volume, volatility, ATR risk, and market-regime filter.</p>
+            </div>
             <div class="card">
                 <h3>Safety Rules</h3>
                 <ul>
@@ -2086,7 +2366,7 @@ function showLiveLocked() {
     document.getElementById("details").innerHTML = `
         <div class="notice">
             <h3>Live Trading Locked</h3>
-            <p>Live trading is only allowed on Mastery Plus. Unlock with MASTER-PAID, choose Mastery Plus, connect a Live Account, and set LIVE_TRADING_ENABLED=true in Render.</p>
+            <p>Live trading is only allowed on Mastery Plus. Unlock with MASTER-PAID, choose Mastery Plus, connect a Live Account, then set LIVE_TRADING_ENABLED=true in Render Environment.</p>
         </div>
     ` + document.getElementById("details").innerHTML;
 }
@@ -2287,11 +2567,18 @@ function brokerRows(data) {
     }
 
     const liveWarning = data.mode === "live" && !data.live_trading_enabled
-        ? "Live connected, live orders blocked"
+        ? "Live connected, owner switch is OFF"
         : "Connected";
 
     document.getElementById("brokerBadge").innerText = `Broker: ${String(data.mode || "").toUpperCase()} connected`;
     setConnectionMeter(100);
+
+    const ownerSwitch = document.getElementById("ownerSwitchText");
+    if (ownerSwitch) {
+        ownerSwitch.innerText = data.live_trading_enabled ? "ON" : "OFF";
+        ownerSwitch.style.color = data.live_trading_enabled ? "#86efac" : "#fecaca";
+    }
+
 
     if (statusCard) {
         statusCard.classList.remove("danger-glow");
@@ -2491,14 +2778,14 @@ def broker_disconnect():
 
 @app.route("/favicon.ico")
 def favicon():
-    svg = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="18" fill="#0b1020"/><path d="M17 43L29 16h6l12 27h-7l-2-5H26l-2 5h-7zm11-11h8l-4-10-4 10z" fill="#60a5fa"/></svg>"""
+    svg = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="18" fill="#0b1020"/><path d="M32 4 L39 12 L50 10 L51 22 L60 30 L52 39 L52 52 L40 51 L32 60 L24 51 L12 52 L12 39 L4 30 L13 22 L14 10 L25 12 Z" fill="#f59e0b"/><path d="M20 23 L29 18 L32 22 L35 18 L44 23 L43 39 L36 47 L28 47 L21 39 Z" fill="#111827"/><circle cx="24" cy="30" r="2" fill="#38bdf8"/><circle cx="40" cy="30" r="2" fill="#38bdf8"/><path d="M29 39 H35 L32 43 Z" fill="#facc15"/></svg>"""
     return app.response_class(svg, mimetype="image/svg+xml")
 
 
 @app.route("/apple-touch-icon.png")
 @app.route("/apple-touch-icon-precomposed.png")
 def apple_touch_icon():
-    svg = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180"><rect width="180" height="180" rx="42" fill="#0b1020"/><path d="M48 124L82 44h17l33 80h-20l-6-16H75l-6 16H48zm34-34h18L91 65 82 90z" fill="#60a5fa"/></svg>"""
+    svg = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180"><rect width="180" height="180" rx="42" fill="#0b1020"/><path d="M90 12 L110 34 L142 29 L145 62 L169 84 L147 111 L149 147 L113 144 L90 168 L67 144 L31 147 L33 111 L11 84 L35 62 L38 29 L70 34 Z" fill="#f59e0b"/><path d="M57 65 L82 51 L90 62 L98 51 L123 65 L120 109 L101 133 L79 133 L60 109 Z" fill="#111827"/><circle cx="68" cy="85" r="6" fill="#38bdf8"/><circle cx="112" cy="85" r="6" fill="#38bdf8"/><path d="M81 110 H99 L90 122 Z" fill="#facc15"/></svg>"""
     return app.response_class(svg, mimetype="image/svg+xml")
 
 
