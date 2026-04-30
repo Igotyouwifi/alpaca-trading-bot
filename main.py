@@ -1187,6 +1187,126 @@ def dashboard():
             color:var(--muted);
             font-size:12px;
         }
+
+        .card, .stat, .theme-option, .signal-card, .mode-card {
+            transition: transform .14s ease, box-shadow .14s ease, border-color .14s ease, filter .14s ease, background .14s ease;
+        }
+        .card:hover, .stat:hover, .signal-card:hover {
+            transform: translateY(-3px);
+            border-color: rgba(255,255,255,.18);
+            box-shadow: 0 18px 44px rgba(0,0,0,.30), 0 0 0 4px var(--glow);
+        }
+        .card:active, .stat:active, .theme-option:active, .signal-card:active, button:active, .mode-card:active {
+            transform: scale(.985) translateY(1px);
+            filter: brightness(1.08);
+        }
+        button, .mode-card, .theme-option {
+            position: relative;
+            overflow: hidden;
+            -webkit-tap-highlight-color: transparent;
+        }
+        button::after, .mode-card::after, .theme-option::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background: radial-gradient(circle at var(--x, 50%) var(--y, 50%), rgba(255,255,255,.22), transparent 35%);
+            opacity: 0;
+            transition: opacity .22s ease;
+            pointer-events: none;
+        }
+        button:hover::after, .mode-card:hover::after, .theme-option:hover::after {
+            opacity: 1;
+        }
+        .broker-grid {
+            display:grid;
+            grid-template-columns: 1.05fr .95fr;
+            gap:14px;
+        }
+        .broker-mode-grid {
+            display:grid;
+            grid-template-columns: repeat(2, minmax(150px, 1fr));
+            gap:12px;
+            margin-bottom:14px;
+        }
+        .mode-card {
+            cursor:pointer;
+            border:1px solid rgba(255,255,255,.10);
+            background:linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.025));
+            color:var(--text);
+            border-radius:20px;
+            padding:16px;
+            min-height:118px;
+            text-align:left;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.03);
+        }
+        .mode-card.active {
+            border-color:var(--accent);
+            box-shadow:0 0 0 4px var(--glow), 0 18px 44px rgba(0,0,0,.28);
+            background:linear-gradient(135deg, rgba(255,255,255,.12), rgba(255,255,255,.035));
+        }
+        .mode-card.live-mode.active {
+            border-color:rgba(239,68,68,.65);
+            box-shadow:0 0 0 4px rgba(239,68,68,.18), 0 18px 44px rgba(0,0,0,.30);
+        }
+        .mode-icon {
+            width:44px;
+            height:44px;
+            border-radius:15px;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            font-size:23px;
+            margin-bottom:10px;
+            background:linear-gradient(135deg,var(--accent),var(--accent2));
+            box-shadow:0 12px 28px var(--glow);
+        }
+        .mode-title { display:block; font-weight:950; font-size:17px; margin-bottom:4px; }
+        .mode-sub { color:var(--muted); font-size:12px; line-height:1.35; }
+        .broker-form {
+            display:grid;
+            grid-template-columns:1fr;
+            gap:10px;
+        }
+        .broker-form input {
+            width:100%;
+            min-width:0;
+            border-radius:16px;
+            padding:14px 15px;
+        }
+        .success-glow {
+            border-color:rgba(16,185,129,.45) !important;
+            box-shadow:0 0 0 4px rgba(16,185,129,.14), 0 18px 44px rgba(0,0,0,.25) !important;
+        }
+        .danger-glow {
+            border-color:rgba(239,68,68,.45) !important;
+            box-shadow:0 0 0 4px rgba(239,68,68,.14), 0 18px 44px rgba(0,0,0,.25) !important;
+        }
+        .connection-meter {
+            height:10px;
+            border-radius:999px;
+            background:rgba(255,255,255,.08);
+            overflow:hidden;
+            margin-top:12px;
+        }
+        .connection-meter > span {
+            display:block;
+            height:100%;
+            width:0%;
+            background:linear-gradient(90deg,var(--accent),var(--accent2),var(--accent3));
+            border-radius:999px;
+            transition:width .45s ease;
+        }
+        .signal-card { position:relative; overflow:hidden; }
+        .signal-card::before {
+            content:"";
+            position:absolute;
+            inset:0 auto 0 0;
+            width:4px;
+            background:linear-gradient(180deg,var(--accent),var(--accent2));
+            opacity:.9;
+        }
+        .click-hint { color:var(--muted); font-size:12px; margin-top:10px; }
+
         @media (max-width: 920px) {
             .split { grid-template-columns:1fr; }
             .wrap { padding: 16px; }
@@ -1195,6 +1315,7 @@ def dashboard():
             .warning-top { flex-direction:column; align-items:flex-start; }
             .warning-mini { white-space:normal; }
             .broker-grid { grid-template-columns:1fr; }
+            .broker-mode-grid { grid-template-columns:1fr; }
         }
     </style>
 </head>
@@ -1259,32 +1380,47 @@ def dashboard():
         </div>
     </section>
 
-    <section class="panel broker-connect">
+    <section class="panel broker-connect" id="brokerPanel">
         <div class="topbar">
             <div>
                 <h2>Broker Connection</h2>
-                <p class="muted">Connect Alpaca Paper or Live keys. The secret is sent to the server for verification and never displayed back.</p>
+                <p class="muted">Pick Paper or Live first. The secret is verified server-side and never displayed back.</p>
             </div>
             <div class="badge" id="brokerBadge">Broker: Not connected</div>
         </div>
 
         <div class="broker-grid">
-            <div class="card">
-                <h3>Connect Account</h3>
-                <div class="actions broker-form">
-                    <select id="brokerMode">
-                        <option value="paper">Alpaca Paper</option>
-                        <option value="live">Alpaca Live</option>
-                    </select>
+            <div class="card" id="brokerConnectCard">
+                <h3>Choose Account Type</h3>
+
+                <div class="broker-mode-grid">
+                    <button type="button" id="modePaper" class="mode-card active" onclick="selectBrokerMode('paper')">
+                        <span class="mode-icon">ð§ª</span>
+                        <span class="mode-title">Paper Account</span>
+                        <span class="mode-sub">Safe testing. No real money. Best for trials and demos.</span>
+                    </button>
+
+                    <button type="button" id="modeLive" class="mode-card live-mode" onclick="selectBrokerMode('live')">
+                        <span class="mode-icon">â¡</span>
+                        <span class="mode-title">Live Account</span>
+                        <span class="mode-sub">Real brokerage connection. Orders stay blocked unless live trading is enabled.</span>
+                    </button>
+                </div>
+
+                <input id="brokerMode" type="hidden" value="paper">
+
+                <div class="broker-form">
                     <input id="brokerKey" placeholder="Alpaca API Key">
                     <input id="brokerSecret" type="password" placeholder="Alpaca Secret Key">
                     <button onclick="connectBroker()" class="green">Connect Broker</button>
                     <button onclick="disconnectBroker()" class="dark">Disconnect</button>
                 </div>
-                <p class="footer-note">For live trading, connection can be successful while real live orders remain blocked unless LIVE_TRADING_ENABLED=true.</p>
+
+                <div class="connection-meter"><span id="connectionMeter"></span></div>
+                <p class="click-hint">Paper first. Live can connect, but real live orders stay blocked while LIVE_TRADING_ENABLED=false.</p>
             </div>
 
-            <div class="card">
+            <div class="card" id="brokerStatusCard">
                 <h3>Connection Status</h3>
                 <div class="rows" id="brokerStatusRows">
                     <div class="row"><span>Status</span><b>Not connected</b></div>
@@ -1688,7 +1824,7 @@ function renderCards(items) {
     if (!items.length) return `<div class="card">No data available.</div>`;
 
     return items.map(s => `
-        <div class="card">
+        <div class="card signal-card">
             <div class="topbar">
                 <h3>${s.symbol}</h3>
                 <span class="${badgeClass(s.signal)}">${s.signal === "sell" ? "bearish" : s.signal}</span>
@@ -1838,9 +1974,46 @@ async function drawChart(id, symbol) {
 }
 
 
+
+function selectBrokerMode(mode) {
+    const paper = document.getElementById("modePaper");
+    const live = document.getElementById("modeLive");
+    const hidden = document.getElementById("brokerMode");
+
+    if (!hidden || !paper || !live) return;
+
+    hidden.value = mode;
+
+    paper.classList.toggle("active", mode === "paper");
+    live.classList.toggle("active", mode === "live");
+
+    const card = document.getElementById("brokerConnectCard");
+    if (card) {
+        card.classList.remove("success-glow", "danger-glow");
+        void card.offsetWidth;
+        card.classList.add(mode === "live" ? "danger-glow" : "success-glow");
+        setTimeout(() => card.classList.remove("success-glow", "danger-glow"), 520);
+    }
+}
+
+function setConnectionMeter(percent) {
+    const meter = document.getElementById("connectionMeter");
+    if (meter) meter.style.width = String(percent || 0) + "%";
+}
+
 function brokerRows(data) {
+    const statusCard = document.getElementById("brokerStatusCard");
+
     if (!data.connected) {
         document.getElementById("brokerBadge").innerText = "Broker: Not connected";
+        setConnectionMeter(0);
+
+        if (statusCard) {
+            statusCard.classList.remove("success-glow");
+            statusCard.classList.add("danger-glow");
+            setTimeout(() => statusCard.classList.remove("danger-glow"), 700);
+        }
+
         document.getElementById("brokerStatusRows").innerHTML = `
             <div class="row"><span>Status</span><b>Not connected</b></div>
             <div class="row"><span>Message</span><b>${data.message || "Connect your account"}</b></div>
@@ -1849,10 +2022,17 @@ function brokerRows(data) {
     }
 
     const liveWarning = data.mode === "live" && !data.live_trading_enabled
-        ? "Live connected, live orders still blocked"
+        ? "Live connected, live orders blocked"
         : "Connected";
 
-    document.getElementById("brokerBadge").innerText = `Broker: ${data.mode.toUpperCase()} connected`;
+    document.getElementById("brokerBadge").innerText = `Broker: ${String(data.mode || "").toUpperCase()} connected`;
+    setConnectionMeter(100);
+
+    if (statusCard) {
+        statusCard.classList.remove("danger-glow");
+        statusCard.classList.add("success-glow");
+        setTimeout(() => statusCard.classList.remove("success-glow"), 900);
+    }
 
     document.getElementById("brokerStatusRows").innerHTML = `
         <div class="row"><span>Status</span><b>${liveWarning}</b></div>
@@ -1892,7 +2072,9 @@ async function connectBroker() {
     const secretKey = document.getElementById("brokerSecret").value.trim();
     const mode = document.getElementById("brokerMode").value;
 
+    setConnectionMeter(35);
     brokerRows({ connected: false, message: "Checking broker connection..." });
+    setConnectionMeter(55);
 
     try {
         const res = await fetch("/broker/connect", {
@@ -1908,10 +2090,12 @@ async function connectBroker() {
         const data = await res.json();
 
         if (!res.ok || !data.connected) {
+            setConnectionMeter(0);
             brokerRows({ connected: false, message: data.message || "Connection failed." });
             return;
         }
 
+        setConnectionMeter(85);
         brokerToken = data.token;
         localStorage.setItem("brokerToken", brokerToken);
 
@@ -1940,6 +2124,16 @@ async function disconnectBroker() {
     brokerRows({ connected: false, message: "Broker disconnected." });
 }
 
+
+document.addEventListener("pointermove", (e) => {
+    const target = e.target.closest("button, .mode-card, .theme-option");
+    if (!target) return;
+    const rect = target.getBoundingClientRect();
+    target.style.setProperty("--x", (e.clientX - rect.left) + "px");
+    target.style.setProperty("--y", (e.clientY - rect.top) + "px");
+});
+
+selectBrokerMode("paper");
 applyTheme(currentTier);
 checkLicense();
 loadTier(currentTier);
