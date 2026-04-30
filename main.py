@@ -903,6 +903,9 @@ def dashboard():
 <head>
     <title>AI Stock Agent Dashboard</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#0b1020">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="AI Stock Agent">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root {
@@ -939,6 +942,109 @@ def dashboard():
             transition: background .45s ease, color .25s ease;
         }
         .wrap { max-width: 1480px; margin: auto; padding: 24px; }
+        .app-shell {
+            border-radius: 34px;
+            border: 1px solid rgba(255,255,255,.10);
+            background: linear-gradient(180deg, rgba(255,255,255,.035), rgba(255,255,255,.015));
+            box-shadow: 0 28px 120px rgba(0,0,0,.34);
+            padding: 14px;
+        }
+        .brand-row {
+            display:flex;
+            justify-content:space-between;
+            align-items:center;
+            gap:14px;
+            margin-bottom:16px;
+        }
+        .brand {
+            display:flex;
+            align-items:center;
+            gap:12px;
+        }
+        .brand-logo {
+            width:54px;
+            height:54px;
+            border-radius:18px;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            font-size:23px;
+            font-weight:1000;
+            letter-spacing:-1px;
+            background:
+                linear-gradient(135deg, var(--accent), var(--accent2)),
+                radial-gradient(circle at 25% 20%, rgba(255,255,255,.55), transparent 35%);
+            box-shadow: 0 18px 42px var(--glow), inset 0 1px 0 rgba(255,255,255,.22);
+            color:white;
+            user-select:none;
+        }
+        .brand-name {
+            display:flex;
+            flex-direction:column;
+            line-height:1.08;
+        }
+        .brand-name b {
+            font-size:18px;
+            letter-spacing:-.2px;
+        }
+        .brand-name span {
+            font-size:12px;
+            color:var(--muted);
+            font-weight:800;
+        }
+        .app-status-pill {
+            border-radius:999px;
+            padding:9px 12px;
+            border:1px solid rgba(16,185,129,.35);
+            background:rgba(16,185,129,.12);
+            color:#bbf7d0;
+            font-size:13px;
+            font-weight:900;
+            white-space:nowrap;
+        }
+        .copyable, input, textarea, pre {
+            -webkit-user-select: text !important;
+            user-select: text !important;
+        }
+        input {
+            touch-action: manipulation;
+        }
+        .input-row {
+            display:grid;
+            grid-template-columns: 1fr auto;
+            gap:8px;
+            width:100%;
+        }
+        .paste-btn, .copy-btn {
+            padding:12px 13px;
+            border-radius:14px;
+            background:rgba(255,255,255,.06);
+            border:1px solid rgba(255,255,255,.10);
+            color:var(--text);
+            box-shadow:none;
+            white-space:nowrap;
+        }
+        .paste-btn:hover, .copy-btn:hover {
+            border-color:var(--accent);
+            box-shadow:0 0 0 4px var(--glow);
+        }
+        .code-box {
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:10px;
+            border-radius:16px;
+            border:1px solid rgba(255,255,255,.10);
+            background:rgba(0,0,0,.18);
+            padding:12px 14px;
+            margin-top:10px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        }
+        .real-app-card {
+            background:
+                linear-gradient(180deg, rgba(255,255,255,.075), rgba(255,255,255,.025)),
+                radial-gradient(circle at 80% 0%, var(--heroA), transparent 35%);
+        }
         .warning-top {
             display:flex;
             justify-content:space-between;
@@ -1393,6 +1499,17 @@ def dashboard():
 </head>
 <body>
 <div class="wrap">
+    <div class="app-shell">
+        <div class="brand-row">
+            <div class="brand">
+                <div class="brand-logo">AI</div>
+                <div class="brand-name">
+                    <b>AI Stock Agent</b>
+                    <span>Premium Trading Dashboard</span>
+                </div>
+            </div>
+            <div class="app-status-pill">â Service Live</div>
+        </div>
     <section class="warning-top">
         <div>
             <b>Important:</b> Paper mode is simulation only. Signals are not guaranteed profit. Live trading stays locked unless you manually enable it. Free trials require payment method + license key.
@@ -1400,7 +1517,7 @@ def dashboard():
         <div class="warning-mini">Never share API keys or license keys.</div>
     </section>
 
-    <section class="hero" id="heroCard">
+    <section class="hero real-app-card" id="heroCard">
         <div class="topbar">
             <div>
                 <div class="hero-meta">
@@ -1419,10 +1536,19 @@ def dashboard():
                 <div class="tier-emblem" id="tierEmblem">â¦</div>
                 <h3 id="tierCardTitle">License Access</h3>
                 <p class="muted">Enter the license key received after checkout to unlock trial or paid access.</p>
-                <div class="actions">
-                    <input id="licenseInput" placeholder="Enter license key">
-                    <button onclick="saveKey()" class="green">Unlock</button>
-                    <button onclick="clearKey()" class="dark">Clear</button>
+                <div class="broker-form">
+                    <div class="input-row">
+                        <input id="licenseInput" class="copyable" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" placeholder="Enter license key">
+                        <button type="button" class="paste-btn" onclick="pasteInto('licenseInput')">Paste</button>
+                    </div>
+                    <div class="actions">
+                        <button onclick="saveKey()" class="green">Unlock</button>
+                        <button onclick="clearKey()" class="dark">Clear</button>
+                    </div>
+                </div>
+                <div class="code-box">
+                    <span id="testKeyText">MASTER-PAID</span>
+                    <button type="button" class="copy-btn" onclick="copyText('MASTER-PAID')">Copy Test Key</button>
                 </div>
                 <div class="theme-line"></div>
                 <p id="licenseStatus" class="muted"></p>
@@ -1462,7 +1588,7 @@ def dashboard():
         </div>
 
         <div class="broker-grid">
-            <div class="card" id="brokerConnectCard">
+            <div class="card real-app-card" id="brokerConnectCard">
                 <h3>Choose Account Type</h3>
 
                 <div class="broker-mode-grid">
@@ -1482,8 +1608,14 @@ def dashboard():
                 <input id="brokerMode" type="hidden" value="paper">
 
                 <div class="broker-form">
-                    <input id="brokerKey" placeholder="Alpaca API Key">
-                    <input id="brokerSecret" type="password" placeholder="Alpaca Secret Key">
+                    <div class="input-row">
+                        <input id="brokerKey" class="copyable" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Alpaca API Key">
+                        <button type="button" class="paste-btn" onclick="pasteInto('brokerKey')">Paste</button>
+                    </div>
+                    <div class="input-row">
+                        <input id="brokerSecret" class="copyable" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Alpaca Secret Key">
+                        <button type="button" class="paste-btn" onclick="pasteInto('brokerSecret')">Paste</button>
+                    </div>
                     <button onclick="connectBroker()" class="green">Connect Broker</button>
                     <button onclick="disconnectBroker()" class="dark">Disconnect</button>
                 </div>
@@ -1492,7 +1624,7 @@ def dashboard():
                 <p class="click-hint">Paper first. Live can connect, but real live orders stay blocked while LIVE_TRADING_ENABLED=false.</p>
             </div>
 
-            <div class="card" id="brokerStatusCard">
+            <div class="card real-app-card" id="brokerStatusCard">
                 <h3>Connection Status</h3>
                 <div class="rows" id="brokerStatusRows">
                     <div class="row"><span>Status</span><b>Not connected</b></div>
@@ -1556,6 +1688,7 @@ def dashboard():
         </div>
         <div id="details"></div>
     </section>
+    </div>
 </div>
 
 <script>
@@ -1681,6 +1814,32 @@ function effectiveTheme(tier) {
 
 document.getElementById("licenseInput").value = licenseKey;
 
+async function pasteInto(id) {
+    const input = document.getElementById(id);
+    if (!input) return;
+
+    input.focus();
+
+    try {
+        const text = await navigator.clipboard.readText();
+        input.value = text.trim();
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+    } catch {
+        alert("Paste permission was blocked. Tap inside the box and use normal paste.");
+    }
+}
+
+async function copyText(text) {
+    try {
+        await navigator.clipboard.writeText(text);
+        const status = document.getElementById("licenseStatus");
+        if (status) status.innerText = "Copied test key.";
+    } catch {
+        alert("Copy was blocked. Manually select and copy: " + text);
+    }
+}
+
+
 function money(v) { return "$" + Number(v || 0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2}); }
 function pct(v) { return Number(v || 0).toFixed(2) + "%"; }
 function assetName(s) { return s.symbol.includes("-USD") ? "Crypto" : "Stock"; }
@@ -1791,11 +1950,13 @@ async function checkLicense() {
 }
 
 function lockedHTML(err) {
+    const link = err.checkout_link && !err.checkout_link.includes("PUT_YOUR") ? err.checkout_link : "";
     return `
         <div class="notice">
-            <h3>Tier locked</h3>
-            <p>${err.message || "Enter a valid license key."}</p>
-            <p><b>Next step:</b> Complete checkout, then enter your license key to unlock your trial or paid tier.</p>
+            <h3>Access Locked</h3>
+            <p>${err.message || "Payment/license required."}</p>
+            ${link ? `<p><b>Checkout:</b> <span class="copyable">${link}</span></p>` : ""}
+            <p><b>Next step:</b> Complete checkout, paste your license key, then unlock.</p>
         </div>
     `;
 }
@@ -2325,6 +2486,20 @@ def broker_disconnect():
         "connected": False,
         "message": "Broker disconnected."
     })
+
+
+
+@app.route("/favicon.ico")
+def favicon():
+    svg = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="18" fill="#0b1020"/><path d="M17 43L29 16h6l12 27h-7l-2-5H26l-2 5h-7zm11-11h8l-4-10-4 10z" fill="#60a5fa"/></svg>"""
+    return app.response_class(svg, mimetype="image/svg+xml")
+
+
+@app.route("/apple-touch-icon.png")
+@app.route("/apple-touch-icon-precomposed.png")
+def apple_touch_icon():
+    svg = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180"><rect width="180" height="180" rx="42" fill="#0b1020"/><path d="M48 124L82 44h17l33 80h-20l-6-16H75l-6 16H48zm34-34h18L91 65 82 90z" fill="#60a5fa"/></svg>"""
+    return app.response_class(svg, mimetype="image/svg+xml")
 
 
 @app.route("/status")
